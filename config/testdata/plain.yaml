@@ -1,0 +1,10 @@
+current_context: team
+contexts:
+    - name: team
+      server: http://jobs.example.com:8080
+      auth:
+        scheme: token
+        username: alice
+defaults:
+    timeout: 45s
+    read_only: true

@@ -1,0 +1,22 @@
+current_context: prod
+contexts:
+    - name: default
+      server: https://dc.example.com/deploy
+      flavor: selfhosted
+      auth:
+        scheme: pat
+    - name: prod
+      server: https://site.cloud.example
+      flavor: auto
+      detected_flavor: cloud
+      auth:
+        credential_url: https://help.example.com/tokens
+        scheme: basic
+        username: alice@example.com
+defaults:
+    project: KEY
+    format: table
+    page_size: 50
+    timeout: 1m30s
+    max_retries: 5
+    read_only: true

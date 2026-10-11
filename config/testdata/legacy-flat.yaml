@@ -1,0 +1,8 @@
+server: https://legacy.example.com/
+flavor: selfhosted
+auth:
+  scheme: pat
+  username: Bob
+defaults:
+  project: OLD
+  page_size: 10
