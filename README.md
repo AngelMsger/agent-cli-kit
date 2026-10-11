@@ -41,7 +41,7 @@ client := transport.New(transport.Options{
 
 store := credstore.NewStore(configDir, "jenkins-cli")
 
-checker := update.Checker{Repo: "AngelMsger/jenkins-cli", EndpointEnv: "JENKINS_CLI_RELEASE_API"}
+checker := update.Checker{Repo: "AngelMsger/jenkins-cli", EndpointEnv: "JENKINS_RELEASE_API"}
 status := checker.Cached(ctx, client, cacheDir, constants.Version)
 ```
 

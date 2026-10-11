@@ -1,7 +1,7 @@
 # Agent Guide
 
 This file is the canonical instruction source for coding agents working in
-`agent-cli-kit`. [`CLAUDE.md`](CLAUDE.md) only points here.
+`agent-cli-kit`.
 
 ## What this is
 
