@@ -3,11 +3,13 @@ module github.com/angelmsger/agent-cli-kit
 go 1.24.0
 
 require (
+	github.com/joho/godotenv v1.5.1
 	github.com/neilotoole/jsoncolor v0.7.2
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.9
 	github.com/zalando/go-keyring v0.2.8
 	golang.org/x/sys v0.37.0
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (

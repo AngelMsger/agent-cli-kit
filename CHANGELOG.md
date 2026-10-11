@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `config`: the configuration engine every CLI carried in its own
+  `internal/config`. A CLI registers a field table (`Field`: environment
+  names, default, team preset, the scheme a secret implies), its file
+  location (`Paths`) and its command wording (`Words`) with `Register`, keeps
+  its own structs and YAML shape, and moves values with `Encode` and
+  `Decode`. The package provides `Load` with per-field provenance and context
+  selection, `StoredContext`, `DefaultValues`, `File` (`Context`,
+  `ContextNames`, `Upsert`, `Remove`), `ReadFile`/`WriteFile` with an atomic
+  0600 write, `ResolveDir`, `NormalizeServiceURL`, `ValidateService`,
+  `PlanServiceContext`, `AuthGuide`,
+  `WithCredentialGuide`, `UseContext`, `DeleteContext`, the
+  `UNKNOWN_CONTEXT` hint and error, and the `--help` reminder block and
+  `_notice` payload for an implicitly chosen context. Reconciled from the
+  seven CLIs. An assumed `http://`, a trimmed API root, a legacy directory,
+  reset-by fields, and the `AfterMerge`, `Validate` and `CheckPlan` hooks are
+  opt-in.
+- `UNKNOWN_CONTEXT` always names the listing command in `next_steps`. A CLI
+  that did not print it before gains the field when it adopts the package.
+- Tests that pin the JSON of the configuration errors, the `set-context`
+  plan, the auth guide and the context notice, and golden files for the YAML
+  the package writes.
+
 ## [0.2.0] - 2026-10-11
 
 ### Added
