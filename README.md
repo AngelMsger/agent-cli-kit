@@ -22,6 +22,7 @@ go get github.com/angelmsger/agent-cli-kit@latest
 | `output` | JSON and table rendering, `--fields` projection, the list envelope with pagination and `_notice`. |
 | `transport` | HTTP client with decorators, bounded retries that replay the request body, and optional `--verbose` logging. |
 | `credstore` | Secret storage in the OS keychain with a protected file fallback. Probes macOS for a default keychain first. |
+| `auth` | Auth schemes, the `Authorization` header, keychain account keys, and `Resolve`, which finds a secret and returns recovery errors an agent can act on when the sandbox cannot see it. |
 | `cliflags` | Corrects common agent mistakes in argv (`--flag value` vs `--flag=value`, literal `\n` in body flags). |
 | `update` | Cached check against a repository's latest GitHub release. |
 
@@ -41,6 +42,27 @@ client := transport.New(transport.Options{
 
 store := credstore.NewStore(configDir, "jenkins-cli")
 
+// Auth schemes and the product wording of the recovery steps.
+auth.Register(&auth.Product{
+	Schemes: []auth.Scheme{
+		{Name: "token", Kind: auth.Basic, MissingCode: "AUTH_NO_TOKEN",
+			Missing: "token auth requires both a username and an API token"},
+		{Name: "basic", Kind: auth.Basic, Missing: "basic auth requires both a username and a password"},
+	},
+	DefaultScheme:    "token",
+	Name:             "Jenkins",
+	Doctor:           "jenkins-cli doctor",
+	MissingStep:      "Only if the host retry also reports missing credentials, run `jenkins-cli config init` in the user's terminal or set JENKINS_* environment variables.",
+	InaccessibleStep: "Do not run `config init` unless the same check also fails in the host environment.",
+	ListSchemes:      true,
+})
+cred, err := auth.Resolve(auth.Request{
+	Scheme:   cfg.Auth.Scheme,
+	Username: cfg.Auth.Username,
+	Secrets:  map[string]string{"token": secrets.Token, "basic": secrets.Password},
+	BaseURL:  cfg.BaseURL,
+}, store)
+
 checker := update.Checker{Repo: "AngelMsger/jenkins-cli", EndpointEnv: "JENKINS_RELEASE_API"}
 status := checker.Cached(ctx, client, cacheDir, constants.Version)
 ```
@@ -56,9 +78,12 @@ only some CLIs had is therefore opt-in:
 | `transport.Options.RetryMethods` | GET and HEAD only | wecom-calendar-cli adds `PROPFIND` and `REPORT`. |
 | `cliflags.InterpretEscapes` body flags | caller's set | bitbucket-cli passes its own body flags. |
 | `errors.SetGuidance` | neutral hints | Every CLI installs its own. |
+| `auth.Product.ListSchemes` | off | jenkins-cli, prometheus-cli and openobserve-cli name the accepted schemes in `AUTH_BAD_SCHEME`. |
+| `auth.Product.AccountKeyIncludesPath` | off | prometheus-cli, which always keyed secrets by host and path. Turning it on elsewhere would orphan stored secrets. |
+| `auth.Scheme` hooks (`Header`, `Validate`, `Decorate`) | the scheme's `Kind` decides | openobserve-cli for its pass-through token and browser session. |
 
-The JSON a CLI prints (the error envelope, the list envelope, `_notice`, and
-the update status) is pinned by tests. Changing it is a breaking change for
+The JSON a CLI prints (the error envelope, the list envelope, `_notice`, the
+update status, and the credential recovery errors) is pinned by tests. Changing it is a breaking change for
 every CLI and every agent that reads them.
 
 ## Versioning

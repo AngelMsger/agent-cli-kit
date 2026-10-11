@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `auth`: scheme table (`Register`, `Scheme`, `Kind`), `Credential` with
+  `Validate`, `Header`, `Decorator` and `Redacted`, `AccountKey`, `Resolve`,
+  `Save`, `Forget`, and the shared recovery errors
+  `CREDENTIAL_NOT_VISIBLE_OR_MISSING`, `CREDENTIAL_STORE_INACCESSIBLE` and
+  `CREDENTIAL_SERVICE_MISMATCH`. Reconciled from the seven CLIs'
+  `internal/auth`. Listing schemes in `AUTH_BAD_SCHEME`, keying secrets by URL
+  path, and the openobserve-style scheme hooks are opt-in.
+- A test that pins the JSON of both credential recovery errors.
+
+## [0.1.0] - 2026-10-11
+
+### Added
+
 - `errors`, `output`, `transport`, `credstore`, `cliflags` and `update`,
   reconciled from the copies in jira-cli, confluence-cli, bitbucket-cli,
   jenkins-cli, prometheus-cli, openobserve-cli and wecom-calendar-cli.
