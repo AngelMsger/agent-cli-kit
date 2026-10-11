@@ -16,7 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `transport.Options.UserAgent`, `SameOriginRedirects` and `RetryMethods`.
   The redirect guard and extra retry methods are opt-in.
 - `credstore.NewStore` takes the keychain service name, so each CLI keeps its
-  existing entries.
+  existing entries. Only `NewStore` runs the macOS keychain probe;
+  `NewStoreWithBackend` always uses the backend it is given, so tests behave
+  the same on every OS.
 - `update.Checker` takes the release repository and its endpoint override.
 - Tests that pin the JSON of the error envelope, list envelope, pagination
   notice, input corrections and update status.

@@ -69,6 +69,10 @@ type Store struct {
 	service string // keychain service name, usually the CLI's binary name
 	keyring Backend
 
+	// probe reports whether the OS keychain is worth attempting; see
+	// useKeychain. Its answer is cached per store because it depends on HOME.
+	// nil means always attempt the backend.
+	probe     func() bool
 	probeOnce sync.Once
 	probeOK   bool
 }
@@ -82,10 +86,15 @@ const (
 // NewStore returns a Store that keeps secrets under the keychain service name
 // service, with its file fallback in dir.
 func NewStore(dir, service string) *Store {
-	return NewStoreWithBackend(dir, service, systemKeyring{})
+	s := NewStoreWithBackend(dir, service, systemKeyring{})
+	s.probe = probeKeychain
+	return s
 }
 
-// NewStoreWithBackend returns a Store using the supplied keychain backend.
+// NewStoreWithBackend returns a Store using the supplied keychain backend. It
+// skips the macOS availability probe and always attempts b, because the probe
+// guards the system keychain only; tests rely on this to behave the same on
+// every OS.
 func NewStoreWithBackend(dir, service string, b Backend) *Store {
 	return &Store{dir: dir, service: service, keyring: b}
 }
@@ -95,7 +104,10 @@ func NewStoreWithBackend(dir, service string, b Backend) *Store {
 // write itself raises a destructive system dialog rather than an error — see
 // probeKeychain in available_darwin.go.
 func (s *Store) useKeychain() bool {
-	s.probeOnce.Do(func() { s.probeOK = probeKeychain() })
+	if s.probe == nil {
+		return true
+	}
+	s.probeOnce.Do(func() { s.probeOK = s.probe() })
 	return s.probeOK
 }
 

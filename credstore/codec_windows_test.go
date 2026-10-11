@@ -11,9 +11,8 @@ import (
 )
 
 func TestWindowsFallbackFileUsesDPAPI(t *testing.T) {
-	withKeychain(t, false)
 	dir := t.TempDir()
-	s := NewStoreWithBackend(dir, testService, newStub(nil))
+	s := newTestStore(dir, newStub(nil), false)
 	const secret = "windows-fallback-secret"
 	backend, err := s.Save("host:basic", secret)
 	if err != nil {
