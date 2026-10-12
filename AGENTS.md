@@ -8,7 +8,7 @@ This file is the canonical instruction source for coding agents working in
 Shared Go packages used by every CLI in the AngelMsger family. A change here
 reaches seven CLIs at once, so it is reviewed as a change to all of them. The
 family's design principles and documentation live in
-[oa-cli](https://github.com/AngelMsger/oa-cli); this repository holds code.
+[agent-clis](https://github.com/AngelMsger/agent-clis); this repository holds code.
 
 ## Ground rules
 
