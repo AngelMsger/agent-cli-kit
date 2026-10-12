@@ -122,10 +122,12 @@ every CLI and every agent that reads them.
 
 ## Versioning
 
-The kit follows semantic versioning. Until v1.0.0, a minor release may change
-the Go API but never the JSON a CLI prints. Each CLI pins a released version in
-its `go.mod`. For work across the kit and a CLI at once, use a `go.work` file
-at the workspace root rather than a `replace` directive.
+The kit follows semantic versioning, and its Go API is stable from v1.0.0: a
+minor or patch release only adds, and a change that breaks a caller needs a new
+major version with a `/v2` module path. The JSON a CLI prints is held to the
+same rule. Each CLI pins a released version in its `go.mod`. For work across
+the kit and a CLI at once, use a `go.work` file at the workspace root rather
+than a `replace` directive.
 
 ## Development
 
