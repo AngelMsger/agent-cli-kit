@@ -7,14 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [1.0.0] - 2026-10-12
-
-### Changed
-
-- The Go API of every package (`auth`, `cliflags`, `config`, `credstore`,
-  `errors`, `output`, `transport`, `update`) is now stable: later 1.x releases
-  only add to it. The code is the same as 0.3.0.
-
 ## [0.3.0] - 2026-10-11
 
 ### Added
