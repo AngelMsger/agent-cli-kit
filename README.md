@@ -8,7 +8,7 @@ probe lands once.
 
 The kit holds code only. The family's principles and rules for building CLIs
 that work well for both people and agents live in
-[oa-cli](https://github.com/AngelMsger/oa-cli).
+[agent-clis](https://github.com/AngelMsger/agent-clis).
 
 ```sh
 go get github.com/angelmsger/agent-cli-kit@latest
