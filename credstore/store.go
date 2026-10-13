@@ -1,6 +1,6 @@
 // Package credstore persists secrets for a CLI. It prefers the OS keychain and
-// transparently falls back to a protected file under the config directory when
-// no keychain is available.
+// falls back to a protected file when no keychain is available or the account
+// is confirmed absent there. Inaccessible existing credentials are not replaced.
 //
 // Every program that reads a CLI's credentials (the CLI itself, or a desktop
 // app built on it) must agree byte for byte on where a credential is kept: the
@@ -27,19 +27,33 @@ const CredentialsFileName = "credentials"
 // ErrSecretNotFound is returned by a Store when no secret exists for an account.
 var ErrSecretNotFound = errors.New("secret not found")
 
-// StoreAccessError means the credential store could not be inspected. It is
-// intentionally distinct from ErrSecretNotFound: a caller must not tell the
-// user to reconfigure credentials when a sandbox merely hid the keychain.
+// StoreAccessError means a credential-store operation could not complete
+// safely. It is distinct from ErrSecretNotFound: an inaccessible store is not
+// evidence that a credential is absent or has been successfully replaced.
 type StoreAccessError struct {
 	Backend string
 	Err     error
 }
 
 func (e *StoreAccessError) Error() string {
-	return fmt.Sprintf("%s credential store is inaccessible: %v", e.Backend, e.Err)
+	return fmt.Sprintf("%s credential store operation could not complete safely; a stored credential may remain usable; retry with access to the host user environment and unlocked OS keychain or restore credential-file access", e.Backend)
 }
 
 func (e *StoreAccessError) Unwrap() error { return e.Err }
+
+// PartialSaveError means the new credential reached Backend, but an older
+// fallback could not be removed. Callers must report partial persistence rather
+// than claim either a complete login or that nothing was stored.
+type PartialSaveError struct {
+	Backend string
+	Err     error
+}
+
+func (e *PartialSaveError) Error() string {
+	return "credential stored in " + e.Backend + ", but the older file credential could not be removed; restore configuration-directory access and retry saving before relying on this login"
+}
+
+func (e *PartialSaveError) Unwrap() error { return e.Err }
 
 // Backend is the OS keychain a Store writes to. Exported so callers can supply
 // a stub in tests; NewStore wires the real one.
@@ -112,10 +126,26 @@ func (s *Store) useKeychain() bool {
 }
 
 // Save stores secret for account and returns the backend that accepted it.
+// A failed keychain write only falls back when Get confirms the account is
+// absent. A successful keychain write removes this account's old file copy;
+// a cleanup failure returns the backend with a PartialSaveError. In general, a
+// non-empty backend together with an error means persistence reached that
+// backend but did not complete; callers must check both return values.
 func (s *Store) Save(account, secret string) (string, error) {
 	if s.useKeychain() {
-		if err := s.keyring.Set(s.service, account, secret); err == nil {
+		setErr := s.keyring.Set(s.service, account, secret)
+		if setErr == nil {
+			// A later keychain outage must not expose an older file credential.
+			if err := s.fileDelete(account); err != nil {
+				return BackendKeychain, &PartialSaveError{Backend: BackendKeychain, Err: err}
+			}
 			return BackendKeychain, nil
+		}
+		// A failed write may leave an older value behind, even if the keychain
+		// is temporarily unreadable. Do not report a file save as successful
+		// when a fresh Load could prefer that older value after recovery.
+		if _, err := s.keyring.Get(s.service, account); !secretMissing(err) {
+			return "", &StoreAccessError{Backend: BackendKeychain, Err: errors.Join(setErr, err)}
 		}
 	}
 	if err := s.fileSave(account, secret); err != nil {
@@ -143,7 +173,7 @@ func (s *Store) Load(account string) (string, error) {
 		return secret, nil
 	}
 
-	keyringMissing := errors.Is(keyringErr, keyring.ErrNotFound) || errors.Is(keyringErr, ErrSecretNotFound)
+	keyringMissing := secretMissing(keyringErr)
 	fileMissing := errors.Is(fileErr, ErrSecretNotFound)
 	switch {
 	case keyringMissing && fileMissing:
@@ -160,10 +190,19 @@ func (s *Store) Load(account string) (string, error) {
 // Delete removes the secret for account from both backends. Missing entries
 // are not an error.
 func (s *Store) Delete(account string) error {
+	var keychainErr error
 	if s.useKeychain() {
-		_ = s.keyring.Delete(s.service, account)
+		if err := s.keyring.Delete(s.service, account); err != nil && !secretMissing(err) {
+			// Backend errors may include request data. Report the operation and
+			// recovery without echoing credential material supplied by a backend.
+			keychainErr = &StoreAccessError{Backend: BackendKeychain, Err: err}
+		}
 	}
-	return s.fileDelete(account)
+	return errors.Join(keychainErr, s.fileDelete(account))
+}
+
+func secretMissing(err error) bool {
+	return errors.Is(err, keyring.ErrNotFound) || errors.Is(err, ErrSecretNotFound)
 }
 
 func (s *Store) credentialsPath() string {

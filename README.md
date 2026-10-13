@@ -26,10 +26,11 @@ go get github.com/angelmsger/agent-cli-kit@latest
 | `config` | Layered settings (flags, environment, `.env`, a YAML file of named contexts, defaults) with the layer that supplied each value, context selection, the atomic file write, team presets (`set-context`), and the context hints. |
 | `cliflags` | Corrects common agent mistakes in argv (`--flag value` vs `--flag=value`, literal `\n` in body flags). |
 | `update` | Cached check against a repository's latest GitHub release. |
+| `skill` | Read-only Skill version, load-state and installation inspection over caller-supplied `fs.FS`, plus agent integration directory metadata. |
 
 ## What each CLI supplies
 
-The kit has no product names in it. A CLI passes them in once, at startup:
+The kit has no business CLI names, environment variables or commands in its implementation. Shared Skill integration IDs (such as `codex`) identify supported agent directories; they do not select product behavior. A CLI passes its product settings in once, at startup:
 
 ```go
 // Product hints and next steps for each error category.
@@ -92,6 +93,34 @@ checker := update.Checker{Repo: "AngelMsger/jenkins-cli", EndpointEnv: "JENKINS_
 status := checker.Cached(ctx, client, cacheDir, constants.Version)
 ```
 
+## Output integration
+
+For paginated NDJSON, `output.EmitList` writes item rows first, then emits one
+compact `_notice.pagination` record only if more results remain and every row
+write succeeded. Empty filtered pages and field projections retain continuation;
+completed pages and stdout failures emit no pagination notice. JSON envelopes
+remain unchanged. `Options.NoticeWriter` defaults to stderr;
+`Options.NextFlag` defaults to `--cursor` and controls both the NDJSON hint and
+table footer. Commands supply their actual cursor/offset and continuation flag.
+The family [wire contract](https://github.com/AngelMsger/agent-clis/blob/main/docs/agent-facing-cli-best-practices.md#42-use-stable-envelopes)
+defines observable behavior; package tests pin serialization and ordering.
+
+## Skill read core
+
+`skill.Version`, `VersionsEqual`, `Loaded`, `LoadState`, `Inspect` and
+`Installation` inspect caller-supplied data and filesystems. `Agent`, `Agents`,
+`AgentByID`, `AgentIDs`, `Detect` and `Agent.Destination` provide the shared agent
+integration directory table and destination calculation. The package does not
+read environment variables, discover home/current directories, print output,
+construct Cobra commands or write/remove files.
+
+Each CLI owns its embedded filesystem/root/name, environment lookup, output
+shape and wording, notice timing, and install/uninstall mutation policy. This
+split preserves the existing unknown version `1` and missing/unreadable
+installation behavior. Moving the read core does not change Skill content or
+require a Skill version bump. Consumers need a kit release containing `skill`
+before bumping their module pins; a local workspace alone is not a release.
+
 ## Defaults keep today's behavior
 
 Moving a CLI onto the kit must not change what its users see. Behavior that
@@ -119,6 +148,32 @@ The JSON a CLI prints (the error envelope, the list envelope, `_notice`, the
 update status, the credential recovery errors, and the configuration errors,
 `set-context` plan and auth guide) is pinned by tests. Changing it is a breaking change for
 every CLI and every agent that reads them.
+
+## Credential persistence failures
+
+A successful keychain save removes the same account's older file fallback so
+an outage cannot bring the old credential back. If that cleanup fails, `Save`
+returns the keychain backend together with `*credstore.PartialSaveError`:
+a non-empty backend together with an error signals partial persistence.
+Callers can check those return values without depending on the new error type.
+They must report that the credential was stored but cleanup is incomplete,
+and request restored config-directory access before retrying the save.
+
+After a failed keychain write, a file fallback is safe only when the account
+is explicitly reported missing. If an older value exists or cannot be ruled
+out, `Save` returns `*credstore.StoreAccessError` without writing a fallback.
+Retry with access to the host user environment and an unlocked keychain. This
+also means Linux sessions without a reachable D-Bus/Secret Service can now
+fail to save instead of claiming a login whose credential may later be
+shadowed. A probe that establishes there is no keychain, or an explicitly
+missing account, still permits file storage. Existing fallback reads remain
+available when the keychain cannot be read.
+
+`Delete` attempts both backends and reports failures instead of claiming
+logout succeeded. Missing accounts remain a successful, idempotent deletion;
+other backend failures may leave credentials usable. Callers should preserve
+that uncertainty and offer a host-access retry. Neither save nor delete errors
+echo raw keychain diagnostics, which might contain credential material.
 
 ## Versioning
 

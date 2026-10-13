@@ -72,7 +72,7 @@ func DeleteContext[C, D any](f *File[C, D], name string) (C, error) {
 		}
 	}
 	f.Contexts = kept
-	if f.CurrentContext == stored {
+	if strings.EqualFold(f.CurrentContext, stored) {
 		f.CurrentContext = nameOf(f.Contexts[0])
 	}
 	return target, nil

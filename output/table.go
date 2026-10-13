@@ -22,7 +22,8 @@ func emitTable(v any, opt Options) error {
 }
 
 // emitListTable renders a slice. Slices of objects become column tables;
-// slices of scalars become a single column.
+// slices of scalars become a single column. Projection has already flattened
+// any requested dot paths, so columns address literal keys.
 func emitListTable(list []any, opt Options) error {
 	w := opt.Writer
 	if len(list) == 0 {
@@ -44,8 +45,11 @@ func emitListTable(list []any, opt Options) error {
 		m, _ := item.(map[string]any)
 		row := make([]string, len(cols))
 		for i, c := range cols {
+			if len(opt.Fields) > 0 {
+				c = strings.TrimSpace(c)
+			}
 			if m != nil {
-				if val, ok := lookup(m, strings.Split(c, ".")); ok {
+				if val, ok := m[c]; ok {
 					row[i] = cell(val)
 				}
 			}
@@ -63,7 +67,11 @@ func emitKVTable(m map[string]any, opt Options) error {
 	}
 	rows := make([][]string, 0, len(keys))
 	for _, k := range keys {
-		val, _ := lookup(m, strings.Split(k, "."))
+		key := k
+		if len(opt.Fields) > 0 {
+			key = strings.TrimSpace(key)
+		}
+		val := m[key]
 		rows = append(rows, []string{k, cell(val)})
 	}
 	return writeGrid(opt.Writer, []string{"FIELD", "VALUE"}, rows)
@@ -145,6 +153,8 @@ func cell(v any) string {
 		return ""
 	case string:
 		return strings.ReplaceAll(t, "\n", " ")
+	case json.Number:
+		return t.String()
 	case float64:
 		if t == float64(int64(t)) {
 			return fmt.Sprintf("%d", int64(t))

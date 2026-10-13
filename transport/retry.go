@@ -2,6 +2,7 @@ package transport
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"strconv"
@@ -21,6 +22,7 @@ import (
 // readers), so retries send the full body, not an empty one.
 func (c *Client) doWithRetry(ctx context.Context, req *http.Request) (*http.Response, error) {
 	idempotent := c.retryable[req.Method]
+	replayable := req.Body == nil || req.Body == http.NoBody || req.GetBody != nil
 
 	for attempt := 0; ; attempt++ {
 		if attempt > 0 && req.GetBody != nil {
@@ -34,7 +36,7 @@ func (c *Client) doWithRetry(ctx context.Context, req *http.Request) (*http.Resp
 		if err == nil && !isTransientStatus(resp.StatusCode) {
 			return resp, nil
 		}
-		if !idempotent || attempt >= c.maxRetries {
+		if !idempotent || !replayable || errors.Is(err, errRedirectPolicy) || attempt >= c.maxRetries {
 			return resp, err
 		}
 

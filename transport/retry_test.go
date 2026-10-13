@@ -82,3 +82,39 @@ func TestRetryMethodsAreOptIn(t *testing.T) {
 		t.Fatalf("PROPFIND without RetryMethods: %d attempts, want 1", doer.callCount)
 	}
 }
+
+func TestNonReplayableBodyIsNotRetried(t *testing.T) {
+	for _, method := range []string{http.MethodGet, "REPORT"} {
+		t.Run(method, func(t *testing.T) {
+			doer := &recordingDoer{statuses: []int{http.StatusServiceUnavailable, http.StatusOK}}
+			c := New(Options{Doer: doer, MaxRetries: 2, RetryBaseDelay: time.Millisecond, RetryMethods: []string{"REPORT"}})
+			req, _ := http.NewRequest(method, "https://example.test", io.NopCloser(strings.NewReader("payload")))
+			resp, err := c.Do(context.Background(), req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+			if doer.callCount != 1 || resp.StatusCode != http.StatusServiceUnavailable {
+				t.Fatalf("calls=%d status=%d", doer.callCount, resp.StatusCode)
+			}
+			body, err := io.ReadAll(resp.Body)
+			if err != nil || string(body) != "ok" {
+				t.Fatalf("final response body unavailable: %q, %v", body, err)
+			}
+		})
+	}
+}
+
+func TestExplicitEmptyBodyCanRetry(t *testing.T) {
+	doer := &recordingDoer{statuses: []int{http.StatusServiceUnavailable, http.StatusOK}}
+	c := New(Options{Doer: doer, MaxRetries: 1, RetryBaseDelay: time.Millisecond})
+	req, _ := http.NewRequest(http.MethodGet, "https://example.test", http.NoBody)
+	resp, err := c.Do(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if doer.callCount != 2 {
+		t.Fatalf("calls=%d, want 2", doer.callCount)
+	}
+}

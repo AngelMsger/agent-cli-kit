@@ -42,3 +42,20 @@ func TestListWireFormat(t *testing.T) {
 		t.Fatalf("pagination notice changed:\n got %q\nwant %q", notice.String(), wantNotice)
 	}
 }
+
+// Notices stay compact and uncolored even when pretty rows are requested.
+// Opaque cursor tokens must survive verbatim, including HTML characters.
+func TestPaginationNoticeWireFormat(t *testing.T) {
+	t.Parallel()
+	var rows, notices bytes.Buffer
+	if err := EmitList([]map[string]any{{"id": "1"}}, "opaque<cursor>&start=25", true, Options{
+		Format: FormatNDJSON, Writer: &rows, NoticeWriter: &notices, Pretty: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	const want = `{"_notice":{"next_steps":["Pass next as --cursor to retrieve the next page."],` +
+		`"pagination":{"has_more":true,"next":"opaque<cursor>&start=25"}}}` + "\n"
+	if notices.String() != want {
+		t.Fatalf("notice=%q, want compact unescaped uncolored line %q", notices.String(), want)
+	}
+}
