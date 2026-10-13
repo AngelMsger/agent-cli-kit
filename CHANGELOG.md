@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `skill`: shared read-only version/load-state and installation inspection, plus agent integration directory metadata; callers retain their environment, output and filesystem mutation policies.
+
+### Changed
+
+- Consolidate output pagination behavior in one case matrix and exact serialized notices in wire tests, retaining independent non-pagination contracts and adding later-row write-failure coverage. Production output behavior is unchanged.
+
+### Fixed
+
+- `output`: render nested field projections in tables without losing their
+  values; retain flattened JSON keys and preserve large integers and precise
+  numeric JSON tokens in every output format.
+- `transport`: bound same-origin redirects to ten hops and stop retrying
+  redirect-policy failures. Do not retry consumed bodies without `GetBody`.
+- `credstore`: report keychain deletion failures while still attempting file
+  cleanup; missing accounts remain an idempotent success.
+- `credstore`: after a failed keychain write, only save a file fallback when the
+  keychain account is confirmed missing. An existing or unreadable account now
+  fails explicitly, including unreachable Linux Secret Service sessions where
+  absence cannot be established. This prevents older credentials from masking
+  a reportedly successful login after keychain recovery.
+- `credstore`: remove an account's stale file fallback after a successful
+  keychain save. Return its backend and `PartialSaveError` if cleanup fails so
+  callers can report partial persistence without exposing credential data.
+
 ## [0.3.0] - 2026-10-11
 
 ### Added

@@ -4,6 +4,7 @@
 package output
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -150,7 +151,9 @@ func toGeneric(v any) (any, error) {
 			"failed to encode result")
 	}
 	var out any
-	if err := json.Unmarshal(raw, &out); err != nil {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	if err := dec.Decode(&out); err != nil {
 		return nil, cerrors.Wrap(err, cerrors.CategoryInternal, "DECODE",
 			"failed to normalize result")
 	}

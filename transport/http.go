@@ -2,6 +2,7 @@ package transport
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -82,6 +83,8 @@ func New(opt Options) *Client {
 	return c
 }
 
+var errRedirectPolicy = errors.New("redirect rejected")
+
 // sameOriginRedirect refuses any redirect that leaves the first hop's origin.
 // The default http.Client would follow redirects and, because Go's own
 // same-domain check ignores scheme and port (and permits subdomains), could
@@ -90,13 +93,16 @@ func New(opt Options) *Client {
 // keeps credentials on the configured server. req.URL.Host includes the
 // port, so a port change is caught too.
 func sameOriginRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) >= 10 {
+		return fmt.Errorf("%w: stopped after 10 redirects", errRedirectPolicy)
+	}
 	if len(via) == 0 {
 		return nil
 	}
 	origin := via[0].URL
 	if req.URL.Scheme != origin.Scheme || !strings.EqualFold(req.URL.Host, origin.Host) {
-		return fmt.Errorf("refusing cross-origin redirect from %s://%s to %s://%s",
-			origin.Scheme, origin.Host, req.URL.Scheme, req.URL.Host)
+		return fmt.Errorf("%w: refusing cross-origin redirect from %s://%s to %s://%s",
+			errRedirectPolicy, origin.Scheme, origin.Host, req.URL.Scheme, req.URL.Host)
 	}
 	return nil
 }

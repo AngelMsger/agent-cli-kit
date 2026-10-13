@@ -15,10 +15,13 @@ const testService = "example-cli"
 // stubKeyring records whether it was touched, so a test can prove the store did
 // NOT reach the OS keychain.
 type stubKeyring struct {
-	err      error
-	touched  bool
-	services map[string]bool
-	items    map[string]string
+	err       error
+	setErr    error
+	getErr    error
+	deleteErr error
+	touched   bool
+	services  map[string]bool
+	items     map[string]string
 }
 
 func newStub(err error) *stubKeyring {
@@ -28,6 +31,9 @@ func newStub(err error) *stubKeyring {
 func (s *stubKeyring) Get(service, account string) (string, error) {
 	s.touched = true
 	s.services[service] = true
+	if s.getErr != nil {
+		return "", s.getErr
+	}
 	if s.err != nil {
 		return "", s.err
 	}
@@ -39,6 +45,9 @@ func (s *stubKeyring) Get(service, account string) (string, error) {
 }
 
 func (s *stubKeyring) Set(service, account, secret string) error {
+	if s.setErr != nil {
+		return s.setErr
+	}
 	s.touched = true
 	s.services[service] = true
 	if s.err != nil {
@@ -49,6 +58,9 @@ func (s *stubKeyring) Set(service, account, secret string) error {
 }
 
 func (s *stubKeyring) Delete(service, account string) error {
+	if s.deleteErr != nil {
+		return s.deleteErr
+	}
 	s.touched = true
 	s.services[service] = true
 	if s.err != nil {
@@ -83,9 +95,11 @@ func TestSavePrefersTheKeychain(t *testing.T) {
 	}
 }
 
-func TestFallsBackToFileWhenTheKeychainErrors(t *testing.T) {
+func TestFallsBackToFileWhenTheKeychainAccountIsAbsent(t *testing.T) {
 	dir := t.TempDir()
-	s := newTestStore(dir, newStub(errors.New("keychain is locked")), true)
+	stub := newStub(nil)
+	stub.setErr = errors.New("keychain write denied")
+	s := newTestStore(dir, stub, true)
 
 	backend, err := s.Save("host:token", "tok")
 	if err != nil {

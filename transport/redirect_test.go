@@ -2,9 +2,12 @@ package transport
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // TestRedirectCrossOriginRefused guards the credential-leak vector: the client
@@ -78,4 +81,25 @@ func TestRedirectCrossOriginFollowedByDefault(t *testing.T) {
 		t.Fatalf("redirect should be followed without SameOriginRedirects: %v", err)
 	}
 	resp.Body.Close()
+}
+
+// Policy failures are terminal even when transient request retries are enabled.
+func TestRedirectLoopIsBoundedWithoutRetry(t *testing.T) {
+	var calls atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		http.Redirect(w, r, "/loop", http.StatusFound)
+	}))
+	defer srv.Close()
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/loop", nil)
+	resp, err := New(Options{SameOriginRedirects: true, MaxRetries: 3, RetryBaseDelay: time.Millisecond}).Do(context.Background(), req)
+	if resp != nil {
+		resp.Body.Close()
+	}
+	if !errors.Is(err, errRedirectPolicy) {
+		t.Fatalf("want redirect policy error, got %v", err)
+	}
+	if got := calls.Load(); got != 10 {
+		t.Fatalf("requests=%d, want 10 including all retries", got)
+	}
 }
