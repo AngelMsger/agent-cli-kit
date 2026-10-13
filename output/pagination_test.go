@@ -117,8 +117,6 @@ func TestListPaginationStates(t *testing.T) {
 	}
 }
 
-// A single local writer adapter supports error and ordering assertions without
-// introducing a reusable test framework.
 type paginationWriter func([]byte) (int, error)
 
 func (w paginationWriter) Write(p []byte) (int, error) { return w(p) }

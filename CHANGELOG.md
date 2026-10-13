@@ -17,6 +17,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `config`: deleting the current context now matches its saved reference
+  case-insensitively, consistent with lookup, so a differently cased reference
+  cannot leave subsequent configuration loads pointing at a deleted context.
 - `output`: render nested field projections in tables without losing their
   values; retain flattened JSON keys and preserve large integers and precise
   numeric JSON tokens in every output format.

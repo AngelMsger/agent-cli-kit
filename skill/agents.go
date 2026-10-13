@@ -10,9 +10,9 @@ import (
 type Agent struct {
 	ID            string   // stable --agent id
 	homeSub       string   // dir under $HOME; global dest is $HOME/<homeSub>/skills/<name>
-	homeMarkers   []string // paths under $HOME proving the agent is installed
+	homeMarkers   []string // paths under $HOME suggesting the agent may be installed
 	projectSkills string   // skills dir relative to the project root
-	projectMarks  []string // paths under the cwd proving the agent is used here
+	projectMarks  []string // project markers used for agent discovery
 }
 
 // agents lists every coding agent the Skill can be installed for.
