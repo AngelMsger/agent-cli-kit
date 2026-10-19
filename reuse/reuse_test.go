@@ -695,7 +695,7 @@ func TestExplicitSelectionFollowsTheCandidateRules(t *testing.T) { // impl B4
 func TestRechecksStayWithinTheDeadline(t *testing.T) { // impl B5
 	e := liveEnv()
 	k := key(ops, "basic")
-	e.stallAt[k], e.stall = 4, 2*time.Second // preload, discovery, verification, recheck
+	e.stallAt[k], e.stall = 3, 2*time.Second // discovery, verification, recheck
 	req := e.request("prod-jdy", liveOpenObserve()...)
 	req.Window = 200 * time.Millisecond
 	started := time.Now()

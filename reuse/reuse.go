@@ -369,13 +369,15 @@ func (r *run) settle(first outcome) (Result, error) {
 	if first.adopted != nil || first.ambiguous != nil {
 		return r.finish(first)
 	}
-	// Stored secrets are looked up before judging the first step, so a keychain
-	// answer among them can serve as the witness for its evidence.
-	if reason := r.preloadStored(); reason != "" {
-		return fallback(reason)
-	}
 	if !r.allSure(first.cands) {
-		return fallback("")
+		// Stored secrets are looked up before judging the first step for good,
+		// so a keychain answer among them can serve as the witness.
+		if reason := r.preloadStored(); reason != "" {
+			return fallback(reason)
+		}
+		if !r.allSure(first.cands) {
+			return fallback("")
+		}
 	}
 	r.earlier = append(r.earlier, first.cands...)
 	for _, session := range []bool{false, true} {
@@ -766,6 +768,13 @@ func (r *run) laterCandidates(session bool) ([]Context, string) {
 			if !r.eligible(s, session) || (s == r.target.Scheme && !auth.UsesUsername(s)) {
 				continue
 			}
+			names := []string{""}
+			if auth.UsesUsername(s) {
+				names = r.serviceUsernames()
+			}
+			if len(names) == 0 {
+				continue // no recorded username could pair with it
+			}
 			// Only a secret that exists is a source. A lookup that cannot
 			// answer might hide one, so the step gives up rather than choose.
 			l, ok := r.lookupWithin(r.req.Key(r.target.KeyBase, s))
@@ -778,10 +787,6 @@ func (r *run) laterCandidates(session bool) ([]Context, string) {
 					continue
 				}
 				return nil, "a stored login could not be read here"
-			}
-			names := []string{""}
-			if auth.UsesUsername(s) {
-				names = r.serviceUsernames()
 			}
 			for _, name := range names {
 				c := Context{Scheme: s, Username: name, KeyBase: r.target.KeyBase, Service: r.target.Service}
