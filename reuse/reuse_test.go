@@ -597,3 +597,17 @@ func TestAnUnauthenticatedContextIsNoSource(t *testing.T) {
 		t.Fatalf("got %v after %d verifications", err, e.verifies)
 	}
 }
+
+func TestAnExplicitSourceMustKeepTheDestinationValid(t *testing.T) {
+	e := liveEnv()
+	req := e.request("prod-jdy", liveOpenObserve()...)
+	req.Valid = func(scheme string) bool { return scheme != "basic" }
+	req.From = "default"
+	if _, err := Run(req); codeOf(err) != "AUTH_REUSE_SOURCE_MISMATCH" || e.lookups != 0 {
+		t.Fatalf("from-context: %v after %d lookups", err, e.lookups)
+	}
+	req.From, req.FromScheme = "", "basic"
+	if _, err := Run(req); codeOf(err) != "AUTH_REUSE_SOURCE_MISMATCH" || e.lookups != 0 {
+		t.Fatalf("from-scheme: %v after %d lookups", err, e.lookups)
+	}
+}

@@ -431,6 +431,9 @@ func (r *run) explicit(from Context) (Result, error) {
 	}
 	var verified []*candidate
 	for _, spec := range specs {
+		if !r.req.Valid(spec.Scheme) {
+			return r.result, r.sourceMismatch("the destination would not be a valid configuration under the source's scheme")
+		}
 		c := &candidate{spec: spec}
 		if spec.Context != "" {
 			cred, l, err := r.req.Resolve(spec)
