@@ -676,7 +676,13 @@ func (r *run) conclude(out outcome, newWork bool) outcome {
 // (browser session) step.
 func (r *run) laterCandidates(session bool) []Context {
 	var list []Context
-	seen := map[string]bool{}
+	// A credential an earlier step already looked at, or the destination's
+	// own, is not tried again: a rejected password must not count twice
+	// toward a lockout.
+	seen := map[string]bool{r.credentialID(contextSpec(r.target)): true}
+	for _, c := range r.earlier {
+		seen[r.credentialID(c.spec)] = true
+	}
 	add := func(c Context) {
 		id := r.credentialID(Spec{Scheme: c.Scheme, Username: c.Username, KeyBase: c.KeyBase})
 		if seen[id] {

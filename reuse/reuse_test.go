@@ -578,3 +578,13 @@ func TestNothingStoredIsAPlainNoChange(t *testing.T) {
 		}
 	}
 }
+
+func TestALoginIsTriedOnce(t *testing.T) {
+	e := newEnv()
+	e.keychain[key(ops, "basic")] = "stale"
+	contexts := []Context{ctxOf("team", ops, "basic", ""), ctxOf("me", ops, "basic", "me")}
+	res, err := Run(e.request("team", contexts...))
+	if err != nil || res.State != StateUnavailable || e.verifies != 1 {
+		t.Fatalf("got %+v, %v after %d verifications", res, err, e.verifies)
+	}
+}
