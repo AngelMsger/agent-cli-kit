@@ -93,9 +93,13 @@ type Request struct {
 	// SchemeSupplied is true when the invocation supplied a scheme by flag,
 	// environment, .env or an environment credential.
 	SchemeSupplied bool
-	From           string
-	FromScheme     string
-	DryRun         bool
+	// SchemeFlag is the scheme the invocation passed by flag, if any. Every
+	// command this package suggests repeats it, so following a step keeps the
+	// constraint; a scheme from the environment or .env carries over by itself.
+	SchemeFlag string
+	From       string
+	FromScheme string
+	DryRun     bool
 
 	// Start is when the command started; the deadline counts from it.
 	Start time.Time
@@ -202,6 +206,13 @@ type run struct {
 
 	abstained   bool
 	storeHidden bool // the keychain failed or was skipped for some lookup
+	preloaded   bool
+
+	// The answer the command gave before, returned whenever new work cannot
+	// reach a better conclusion.
+	origResult Result
+	origErr    error
+	improved   *Result
 
 	targetChecked bool
 	targetEv      evidence
@@ -293,13 +304,15 @@ func (r *run) automatic() (Result, error) {
 		if r.req.SchemeSupplied || r.req.From != "" {
 			return base, nil
 		}
-		return r.settle(base, nil, r.evaluate(first, later))
+		r.origResult = base
+		return r.settle(r.evaluate(first, later))
 	}
 
 	// The baseline: the first step as before, with the pre-access exclusions
 	// and the stand-in lookup. It stops where the command stopped before.
 	out := r.evaluate(first, baseline)
 	base, baseErr := out.result, out.err
+	r.origResult, r.origErr = base, baseErr
 	if out.adopted != nil || out.ambiguous != nil {
 		return r.finish(out)
 	}
@@ -313,7 +326,9 @@ func (r *run) automatic() (Result, error) {
 			return r.result, baseErr
 		}
 		if !r.req.SchemeSupplied {
-			r.preloadStored()
+			if reason := r.preloadStored(); reason != "" {
+				return r.result, baseErr
+			}
 		}
 		if r.expired() || !r.reliable(out.pending.lookup) {
 			return r.result, baseErr
@@ -326,29 +341,25 @@ func (r *run) automatic() (Result, error) {
 		if cont.adopted != nil || cont.ambiguous != nil {
 			return r.finish(cont)
 		}
-		// The absence was reliable: that error becomes a normal no-change result.
-		base, baseErr = r.noChange("no matching stored identity can be reused"), nil
+		// The absence was reliable: that error becomes a normal no-change result,
+		// unless the rest of the new work fails.
+		improved := r.noChange("no matching stored identity can be reused")
+		r.improved = &improved
 		out = cont
 	}
 	if r.req.SchemeSupplied || r.req.From != "" {
+		if r.improved != nil {
+			return *r.improved, nil
+		}
 		return base, nil
 	}
-	return r.settle(base, baseErr, out)
+	return r.settle(out)
 }
 
 // settle runs the later steps after the first one and returns the better of
 // their conclusion and the baseline.
-func (r *run) settle(base Result, baseErr error, first outcome) (Result, error) {
-	fallback := func(reason string) (Result, error) {
-		r.abstained = r.abstained || reason != ""
-		if baseErr != nil {
-			return r.result, baseErr
-		}
-		if reason != "" && base.State != StateReused {
-			base.Reason = reason
-		}
-		return base, nil
-	}
+func (r *run) settle(first outcome) (Result, error) {
+	fallback := r.giveUp
 	if first.abstain != "" {
 		return fallback(first.abstain)
 	}
@@ -358,12 +369,20 @@ func (r *run) settle(base Result, baseErr error, first outcome) (Result, error) 
 	if first.adopted != nil || first.ambiguous != nil {
 		return r.finish(first)
 	}
-	if !first.allUnusable {
+	// Stored secrets are looked up before judging the first step, so a keychain
+	// answer among them can serve as the witness for its evidence.
+	if reason := r.preloadStored(); reason != "" {
+		return fallback(reason)
+	}
+	if !r.allSure(first.cands) {
 		return fallback("")
 	}
 	r.earlier = append(r.earlier, first.cands...)
 	for _, session := range []bool{false, true} {
-		cands := r.laterCandidates(session)
+		cands, reason := r.laterCandidates(session)
+		if reason != "" {
+			return fallback(reason)
+		}
 		if len(cands) == 0 {
 			continue
 		}
@@ -382,7 +401,7 @@ func (r *run) settle(base Result, baseErr error, first outcome) (Result, error) 
 		if out.adopted != nil || out.ambiguous != nil {
 			return r.finish(out)
 		}
-		if !out.allUnusable {
+		if !r.allSure(out.cands) {
 			return fallback("")
 		}
 		r.earlier = append(r.earlier, out.cands...)
@@ -391,6 +410,34 @@ func (r *run) settle(base Result, baseErr error, first outcome) (Result, error) 
 		return r.noChange("no matching stored identity can be reused"), nil
 	}
 	return fallback("")
+}
+
+// giveUp returns the earlier answer when new work cannot reach a better
+// conclusion: its error, or its result with the cause. Work that finished
+// without a failure keeps a conclusion it already reached.
+func (r *run) giveUp(reason string) (Result, error) {
+	r.abstained = r.abstained || reason != ""
+	if reason == "" && r.improved != nil {
+		return *r.improved, nil
+	}
+	if r.origErr != nil {
+		return r.result, r.origErr
+	}
+	res := r.origResult
+	if reason != "" {
+		res.Reason = reason
+	}
+	return res, nil
+}
+
+// allSure reports whether every source is reliably unusable now.
+func (r *run) allSure(cands []*candidate) bool {
+	for _, c := range cands {
+		if c.ev.state != unusable || !r.sure(c.ev) {
+			return false
+		}
+	}
+	return true
 }
 
 // explicit handles --from-scheme and a --from-context of another scheme.
@@ -430,9 +477,13 @@ func (r *run) explicit(from Context) (Result, error) {
 		}
 	}
 	var verified []*candidate
+	var rejection error
 	for _, spec := range specs {
 		if !r.req.Valid(spec.Scheme) {
 			return r.result, r.sourceMismatch("the destination would not be a valid configuration under the source's scheme")
+		}
+		if r.labelled && auth.UsesUsername(spec.Scheme) && !r.req.SameUsername(spec.Username, r.target.Username) {
+			return r.result, r.sourceMismatch("the source's username differs from the one this context records")
 		}
 		c := &candidate{spec: spec}
 		if spec.Context != "" {
@@ -454,11 +505,19 @@ func (r *run) explicit(from Context) (Result, error) {
 			}
 		}
 		account, err := r.req.Verify(context.Background(), spec, c.cred)
-		if err != nil {
+		switch {
+		case err == nil:
+			c.account, c.ev = account, evidence{state: usable}
+			verified = append(verified, c)
+		case rejected(err) && len(specs) > 1:
+			// One of several pairings; another may be the right username.
+			rejection = err
+		default:
 			return r.result, err
 		}
-		c.account, c.ev = account, evidence{state: usable}
-		verified = append(verified, c)
+	}
+	if len(verified) == 0 {
+		return r.result, rejection
 	}
 	verified = dedupe(r, verified)
 	if len(verified) > 1 {
@@ -466,7 +525,7 @@ func (r *run) explicit(from Context) (Result, error) {
 	}
 	chosen := verified[0]
 	if auth.IsSession(r.target.Scheme) && !auth.IsSession(chosen.spec.Scheme) {
-		return r.adopt(chosen)
+		return r.adopt(chosen, false)
 	}
 	if reason := r.checkTarget(false); reason != "" {
 		return r.result, r.targetEv.err
@@ -475,7 +534,7 @@ func (r *run) explicit(from Context) (Result, error) {
 	case r.targetEv.state == usable:
 		return r.unchangedVerified(), nil
 	case r.sure(r.targetEv):
-		return r.adopt(chosen)
+		return r.adopt(chosen, false)
 	case isMissing(r.targetEv.err):
 		return r.result, r.targetEv.err
 	}
@@ -492,7 +551,7 @@ type outcome struct {
 	adopted        *candidate
 	ambiguous      []*candidate
 	verifiedTarget bool
-	allUnusable    bool
+	newWork        bool
 	cands          []*candidate
 	matches        []*candidate
 }
@@ -537,13 +596,12 @@ func (r *run) evaluate(list []Context, m mode) outcome {
 // evidence.
 func (r *run) evaluateFrom(list []Context, start int, m mode, prior outcome) outcome {
 	newWork := m != baseline
-	out := outcome{cands: prior.cands, matches: prior.matches}
+	out := outcome{cands: prior.cands, matches: prior.matches, newWork: newWork}
 	if prior.pending != nil {
 		out.cands = append(out.cands, prior.pending)
 	}
 	if start == 0 && len(list) > 0 {
 		if r.labelled && !r.hasOwnSources(list) {
-			out.allUnusable = true
 			return out
 		}
 		if reason := r.checkTarget(newWork); reason != "" {
@@ -657,12 +715,6 @@ func (r *run) evaluateFrom(list []Context, start int, m mode, prior outcome) out
 func (r *run) conclude(out outcome, newWork bool) outcome {
 	matches := dedupe(r, out.matches)
 	if len(matches) == 0 {
-		out.allUnusable = true
-		for _, c := range out.cands {
-			if !(c.ev.state == unusable && r.sure(c.ev)) {
-				out.allUnusable = false
-			}
-		}
 		out.result = r.noChange("no matching stored identity can be reused")
 		return out
 	}
@@ -680,7 +732,7 @@ func (r *run) conclude(out outcome, newWork bool) outcome {
 
 // laterCandidates lists the sources of the second (long-lived) or third
 // (browser session) step.
-func (r *run) laterCandidates(session bool) []Context {
+func (r *run) laterCandidates(session bool) ([]Context, string) {
 	var list []Context
 	// A credential an earlier step already looked at, or the destination's
 	// own, is not tried again: a rejected password must not count twice
@@ -714,6 +766,19 @@ func (r *run) laterCandidates(session bool) []Context {
 			if !r.eligible(s, session) || (s == r.target.Scheme && !auth.UsesUsername(s)) {
 				continue
 			}
+			// Only a secret that exists is a source. A lookup that cannot
+			// answer might hide one, so the step gives up rather than choose.
+			l, ok := r.lookupWithin(r.req.Key(r.target.KeyBase, s))
+			if !ok {
+				return nil, "the time allowed for checking other logins ran out"
+			}
+			r.observe(l)
+			if err := l.Err(); err != nil {
+				if errors.Is(err, credstore.ErrSecretNotFound) {
+					continue
+				}
+				return nil, "a stored login could not be read here"
+			}
 			names := []string{""}
 			if auth.UsesUsername(s) {
 				names = r.serviceUsernames()
@@ -726,7 +791,7 @@ func (r *run) laterCandidates(session bool) []Context {
 			}
 		}
 	}
-	return list
+	return list, ""
 }
 
 func (r *run) eligible(scheme string, session bool) bool {
@@ -737,22 +802,25 @@ func (r *run) labelMatches(c Context) bool {
 	return !r.labelled || !auth.UsesUsername(c.Scheme) || r.req.SameUsername(c.Username, r.target.Username)
 }
 
-// preloadStored looks up the destination service's stored secrets so that a
-// keychain answer can serve as a witness. Its failures change nothing.
-func (r *run) preloadStored() {
-	if !r.provenance() {
-		return
+// preloadStored looks up the destination service's stored secrets once, so
+// that a keychain answer can serve as a witness before evidence is judged. It
+// returns a reason when the deadline passed first.
+func (r *run) preloadStored() string {
+	if r.preloaded || !r.provenance() {
+		return ""
 	}
+	r.preloaded = true
 	for _, s := range auth.SchemeNames() {
-		if r.expired() {
-			return
+		if !auth.NeedsCredential(s) {
+			continue
 		}
-		if auth.NeedsCredential(s) {
-			if l, ok := r.lookupWithin(r.req.Key(r.target.KeyBase, s)); ok {
-				r.observe(l)
-			}
+		l, ok := r.lookupWithin(r.req.Key(r.target.KeyBase, s))
+		if !ok {
+			return "the time allowed for checking other logins ran out"
 		}
+		r.observe(l)
 	}
+	return ""
 }
 
 // checkTarget resolves and verifies the destination's own credential once. It
@@ -824,12 +892,12 @@ func (r *run) finish(out outcome) (Result, error) {
 	if out.ambiguous != nil {
 		return r.result, r.ambiguous(out.ambiguous)
 	}
-	return r.adopt(out.adopted)
+	return r.adopt(out.adopted, out.newWork)
 }
 
 // adopt points the destination at the chosen source, after rechecking that
 // nothing it relied on changed.
-func (r *run) adopt(c *candidate) (Result, error) {
+func (r *run) adopt(c *candidate, newWork bool) (Result, error) {
 	u := Update{Scheme: c.spec.Scheme}
 	if auth.UsesUsername(c.spec.Scheme) {
 		u.Username, u.SetUsername = c.spec.Username, c.spec.Username != r.target.Username
@@ -857,7 +925,11 @@ func (r *run) adopt(c *candidate) (Result, error) {
 	if r.req.DryRun {
 		return res, nil
 	}
-	if !r.unchangedSource(c) {
+	switch unchanged, ok := r.unchangedSource(c, newWork); {
+	case !ok:
+		// New work stays within its deadline, rechecks included.
+		return r.giveUp("the time allowed for checking other logins ran out")
+	case !unchanged:
 		return res, cerrors.New(cerrors.CategoryConflict, "AUTH_REUSE_CREDENTIAL_CHANGED", "stored credential changed during verification; no identity was saved").
 			WithNextSteps(r.retry())
 	}
@@ -877,27 +949,34 @@ func (r *run) adopt(c *candidate) (Result, error) {
 }
 
 // unchangedSource rechecks the chosen source credential and, when it was
-// looked up, the destination's own entry.
-func (r *run) unchangedSource(c *candidate) bool {
-	if c.spec.Context != "" {
-		cred, _, err := r.req.Resolve(c.spec)
-		if err != nil || cred != c.cred {
-			return false
-		}
-	} else {
-		l := r.req.Lookup(r.req.Key(c.spec.KeyBase, c.spec.Scheme))
-		if l.Err() != nil || l.Secret != c.cred.Secret {
-			return false
-		}
+// looked up, the destination's own entry. ok is false when new work ran out
+// of time before the recheck finished.
+func (r *run) unchangedSource(c *candidate, newWork bool) (unchanged, ok bool) {
+	cred, _, err, ok := r.resolve(c.spec, newWork)
+	if !ok {
+		return false, false
+	}
+	if err != nil || cred != c.cred {
+		return false, true
 	}
 	if r.targetLookup != nil {
-		l := r.req.Lookup(r.req.Key(r.target.KeyBase, r.target.Scheme))
+		key := r.req.Key(r.target.KeyBase, r.target.Scheme)
+		l, ok := r.req.Lookup(key), true
+		if newWork {
+			l, ok = r.lookupWithin(key)
+		}
+		if !ok {
+			return false, false
+		}
 		before := *r.targetLookup
 		if l.Found() != before.Found() || l.Secret != before.Secret || l.Keychain != before.Keychain || l.File != before.File {
-			return false
+			return false, true
 		}
 	}
-	return true
+	if newWork && r.expired() {
+		return false, false
+	}
+	return true, true
 }
 
 func (r *run) ambiguous(cands []*candidate) error {
@@ -913,16 +992,37 @@ func (r *run) ambiguous(cands []*candidate) error {
 		}
 		list = append(list, item)
 	}
-	steps := []string{config.ListContextsStep(), r.selected() + " auth reuse --from-context <name> --dry-run"}
+	// One complete command per candidate, so choosing is following a step.
+	steps := []string{config.ListContextsStep()}
 	for _, c := range cands {
-		if c.spec.Context == "" {
+		switch {
+		case c.spec.Context != "":
+			steps = append(steps, r.selected()+" auth reuse --from-context "+config.QuoteArg(c.spec.Context)+" --dry-run")
+		case !auth.UsesUsername(c.spec.Scheme):
 			steps = append(steps, r.selected()+" auth reuse --from-scheme "+c.spec.Scheme+" --dry-run")
-			break
+		default:
+			if holder := r.usernameHolder(c.spec.Username); holder != "" {
+				steps = append(steps, r.selected()+" auth reuse --from-scheme "+c.spec.Scheme+" --from-context "+config.QuoteArg(holder)+" --dry-run")
+			}
 		}
 	}
 	return cerrors.New(cerrors.CategoryConflict, "AUTH_REUSE_AMBIGUOUS", "multiple matching login identities are available; choose a source").
 		WithDetails(map[string]any{"contexts": names, "candidates": list}).
 		WithNextSteps(steps...)
+}
+
+// usernameHolder names a context on the service that records username, the
+// destination first.
+func (r *run) usernameHolder(username string) string {
+	if r.target.Username != "" && r.req.SameUsername(r.target.Username, username) {
+		return r.target.Name
+	}
+	for _, c := range r.peers() {
+		if c.Username != "" && r.req.SameUsername(c.Username, username) {
+			return c.Name
+		}
+	}
+	return ""
 }
 
 func (r *run) unchanged(reason string) Result {
@@ -1123,7 +1223,11 @@ func (r *run) reliable(l credstore.Lookup) bool {
 }
 
 func (r *run) selected() string {
-	return r.words.App + " " + r.words.ContextFlag + " " + config.QuoteArg(r.target.Name)
+	cmd := r.words.App + " " + r.words.ContextFlag + " " + config.QuoteArg(r.target.Name)
+	if r.req.SchemeFlag != "" {
+		cmd += " --auth-scheme " + r.req.SchemeFlag
+	}
+	return cmd
 }
 
 func (r *run) step(command string) string { return r.words.App + " " + command }

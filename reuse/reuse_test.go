@@ -53,6 +53,9 @@ type env struct {
 	verifyErr       map[string]error
 	slowVerify      map[string]time.Duration
 	slowLookup      map[string]time.Duration
+	stallAt         map[string]int // stall the n-th lookup of a key for stall
+	stall           time.Duration
+	lookupsOf       map[string]int
 	persistErr      error
 
 	lookups, verifies int
@@ -61,15 +64,20 @@ type env struct {
 
 func newEnv() *env {
 	return &env{keychain: map[string]string{}, file: map[string]string{}, accounts: map[string]string{},
-		verifyErr: map[string]error{}, slowVerify: map[string]time.Duration{}, slowLookup: map[string]time.Duration{}}
+		verifyErr: map[string]error{}, slowVerify: map[string]time.Duration{}, slowLookup: map[string]time.Duration{},
+		stallAt: map[string]int{}, lookupsOf: map[string]int{}}
 }
 
 func key(base, scheme string) string { return auth.AccountKey(base, scheme) }
 
 func (e *env) lookup(k string) credstore.Lookup {
 	e.lookups++
+	e.lookupsOf[k]++
 	if d := e.slowLookup[k]; d > 0 {
 		time.Sleep(d)
+	}
+	if n := e.stallAt[k]; n > 0 && e.lookupsOf[k] == n {
+		time.Sleep(e.stall)
 	}
 	var l credstore.Lookup
 	switch {
@@ -618,5 +626,105 @@ func TestAnExplicitSourceMustKeepTheDestinationValid(t *testing.T) {
 	req.From, req.FromScheme = "", "basic"
 	if _, err := Run(req); codeOf(err) != "AUTH_REUSE_SOURCE_MISMATCH" || e.lookups != 0 {
 		t.Fatalf("from-scheme: %v after %d lookups", err, e.lookups)
+	}
+}
+
+// A first-step error resolved by new work stays the answer when the rest of
+// the new work fails.
+func TestResolvedBaselineErrorReturnsWhenLaterWorkFails(t *testing.T) { // impl B1
+	e := liveEnv()
+	e.verifyErr["me@example.com|dev-pw"] = cerrors.New(cerrors.CategoryPermission, "FORBIDDEN", "denied").WithHTTPStatus(403)
+	_, err := Run(e.request("dev", liveOpenObserve()...))
+	if codeOf(err) != "CREDENTIAL_NOT_VISIBLE_OR_MISSING" {
+		t.Fatalf("got %v", err)
+	}
+}
+
+// A session read from the file while the keychain says it holds none is
+// judged after the stored lookups, whose keychain answer is the witness.
+func TestLaterWitnessSettlesFirstStepEvidence(t *testing.T) { // impl B2
+	e := liveEnv()
+	e.file[key(dev, "session")] = "session:expired"
+	res, err := Run(e.request("dev", liveOpenObserve()...))
+	if err != nil || res.State != StateReused || res.Scheme != "basic" {
+		t.Fatalf("got %+v, %v", res, err)
+	}
+}
+
+// Only a stored secret that exists is a source; an absent one does not block
+// another login.
+func TestAbsentStoredSecretIsNoCandidate(t *testing.T) { // impl B3
+	e := newEnv()
+	e.keychainSkipped = true
+	e.file[key(ops, "token")] = "tok"
+	e.accounts["tok"] = ""
+	contexts := []Context{ctxOf("team", ops, "basic", ""), ctxOf("alice", ops, "token", "alice")}
+	res, err := Run(e.request("team", contexts...))
+	if err != nil || res.State != StateReused || res.SourceContext != "alice" || res.Scheme != "token" {
+		t.Fatalf("got %+v, %v", res, err)
+	}
+	// A labelled destination with no alternative secret is not even checked.
+	e = newEnv()
+	e.keychain[key(ops, "session")] = "session:ok"
+	e.accounts["session:ok"] = ""
+	res, err = Run(e.request("solo", ctxOf("solo", ops, "session", "me")))
+	if err != nil || res.State != StateUnchanged || res.Verified || e.verifies != 0 {
+		t.Fatalf("labelled without alternatives: %+v, %v after %d verifications", res, err, e.verifies)
+	}
+}
+
+func TestExplicitSelectionFollowsTheCandidateRules(t *testing.T) { // impl B4
+	e := newEnv()
+	e.keychain[key(ops, "basic")] = "pw"
+	e.accounts["bob|pw"] = ""
+	contexts := []Context{ctxOf("team", ops, "token", ""), ctxOf("x", ops, "session", "alice"), ctxOf("y", ops, "session", "bob")}
+	req := e.request("team", contexts...)
+	req.FromScheme = "basic"
+	res, err := Run(req)
+	if err != nil || res.State != StateReused || res.Username != "bob" {
+		t.Fatalf("rejected pairing stopped the search: %+v, %v", res, err)
+	}
+	labelled := []Context{ctxOf("team", ops, "session", "alice"), ctxOf("bob", ops, "basic", "bob")}
+	req = e.request("team", labelled...)
+	req.From = "bob"
+	if _, err = Run(req); codeOf(err) != "AUTH_REUSE_SOURCE_MISMATCH" {
+		t.Fatalf("label ignored: %v", err)
+	}
+}
+
+func TestRechecksStayWithinTheDeadline(t *testing.T) { // impl B5
+	e := liveEnv()
+	k := key(ops, "basic")
+	e.stallAt[k], e.stall = 4, 2*time.Second // preload, discovery, verification, recheck
+	req := e.request("prod-jdy", liveOpenObserve()...)
+	req.Window = 200 * time.Millisecond
+	started := time.Now()
+	res, err := Run(req)
+	if err != nil || res.State != StateUnavailable || e.persisted != nil || time.Since(started) > time.Second {
+		t.Fatalf("got %+v, %v after %v (lookups of %s: %d)", res, err, time.Since(started), k, e.lookupsOf[k])
+	}
+}
+
+func TestSuggestedCommandsKeepTheSelection(t *testing.T) { // impl B6
+	e := liveEnv()
+	req := e.request("prod-jdy", liveOpenObserve()...)
+	req.DryRun, req.SchemeFlag, req.SchemeSupplied = true, "session", true
+	res, err := Run(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, step := range res.NextSteps {
+		if strings.Contains(step, "auth ") && !strings.Contains(step, "--auth-scheme session") {
+			t.Fatalf("step dropped the scheme: %v", res.NextSteps)
+		}
+	}
+	e = newEnv()
+	e.keychain[key(ops, "basic")] = "pw"
+	e.accounts["a|pw"], e.accounts["b|pw"] = "", ""
+	contexts := []Context{ctxOf("team", ops, "token", ""), ctxOf("x", ops, "session", "a"), ctxOf("y", ops, "session", "b")}
+	_, err = Run(e.request("team", contexts...))
+	steps := strings.Join(cerrors.AsCLIError(err).NextSteps, "\n")
+	if !strings.Contains(steps, "--from-scheme basic --from-context 'x'") || !strings.Contains(steps, "--from-scheme basic --from-context 'y'") {
+		t.Fatalf("ambiguity steps: %s", steps)
 	}
 }
