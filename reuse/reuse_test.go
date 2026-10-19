@@ -552,17 +552,26 @@ func TestTargetMismatchAndMissing(t *testing.T) {
 func TestMayReuse(t *testing.T) {
 	contexts := liveOpenObserve()
 	find := func(name string) Context { c, _ := find(contexts, name); return c }
-	if !MayReuse(find("prod-jdy"), contexts, "", false) || !MayReuse(find("test"), contexts, "", false) {
+	if !MayReuse(find("prod-jdy"), contexts, "", false, nil) || !MayReuse(find("test"), contexts, "", false, nil) {
 		t.Fatal("a session context could reuse a long-lived login")
 	}
-	if MayReuse(find("default"), contexts, "", false) {
+	if MayReuse(find("default"), contexts, "", false, nil) {
 		t.Fatal("a context with an identity needs no reuse")
 	}
-	if MayReuse(find("prod-jdy"), contexts, "", true) {
+	if MayReuse(find("prod-jdy"), contexts, "", true, nil) {
 		t.Fatal("with a supplied scheme only same-scheme sources with a login of their own count")
 	}
-	if MayReuse(find("prod-jdy"), contexts, "someone", false) {
+	if MayReuse(find("prod-jdy"), contexts, "someone", false, nil) {
 		t.Fatal("a runtime username is an identity")
+	}
+	onlyBasic := func(s string) bool { return s == "basic" }
+	solo := []Context{ctxOf("team", ops, "basic", "")}
+	if MayReuse(solo[0], solo, "", false, onlyBasic) {
+		t.Fatal("a scheme the deployment rejects was counted")
+	}
+	labelled := append(solo, ctxOf("browser", ops, "session", "me"))
+	if !MayReuse(labelled[0], labelled, "", false, onlyBasic) {
+		t.Fatal("a recorded username could pair with a stored secret under the destination's scheme")
 	}
 }
 

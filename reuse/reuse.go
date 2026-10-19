@@ -747,7 +747,7 @@ func (r *run) preloadStored() {
 		if r.expired() {
 			return
 		}
-		if auth.NeedsCredential(s) && s != r.target.Scheme {
+		if auth.NeedsCredential(s) {
 			if l, ok := r.lookupWithin(r.req.Key(r.target.KeyBase, s)); ok {
 				r.observe(l)
 			}
@@ -859,13 +859,13 @@ func (r *run) adopt(c *candidate) (Result, error) {
 	}
 	if !r.unchangedSource(c) {
 		return res, cerrors.New(cerrors.CategoryConflict, "AUTH_REUSE_CREDENTIAL_CHANGED", "stored credential changed during verification; no identity was saved").
-			WithNextSteps(r.selected() + " auth reuse --dry-run")
+			WithNextSteps(r.retry())
 	}
 	if err := r.req.Persist(u); err != nil {
 		switch {
 		case errors.Is(err, ErrConfigChanged):
 			return res, cerrors.New(cerrors.CategoryConflict, "AUTH_REUSE_CONFIG_CHANGED", "configuration changed during verification; no identity was saved").
-				WithNextSteps(r.selected() + " auth reuse --dry-run")
+				WithNextSteps(r.retry())
 		case isCLIError(err):
 			return res, err
 		default:
@@ -954,14 +954,7 @@ func (r *run) nextSteps(res Result) []string {
 	case StateReused, StateUnchanged:
 		return []string{check}
 	case StateAvailable:
-		cmd := r.selected() + " auth reuse"
-		if r.req.From != "" {
-			cmd += " --from-context " + config.QuoteArg(r.req.From)
-		}
-		if r.req.FromScheme != "" {
-			cmd += " --from-scheme " + r.req.FromScheme
-		}
-		return []string{cmd}
+		return []string{r.reuseCommand()}
 	}
 	var steps []string
 	if r.abstained || r.storeHidden {
@@ -1135,6 +1128,21 @@ func (r *run) selected() string {
 
 func (r *run) step(command string) string { return r.words.App + " " + command }
 
+// reuseCommand repeats this invocation's selection without --dry-run.
+func (r *run) reuseCommand() string {
+	cmd := r.selected() + " auth reuse"
+	if r.req.From != "" {
+		cmd += " --from-context " + config.QuoteArg(r.req.From)
+	}
+	if r.req.FromScheme != "" {
+		cmd += " --from-scheme " + r.req.FromScheme
+	}
+	return cmd
+}
+
+// retry previews this invocation's selection again.
+func (r *run) retry() string { return r.reuseCommand() + " --dry-run" }
+
 func (r *run) sourceMismatch(message string) error {
 	return cerrors.New(cerrors.CategoryConflict, "AUTH_REUSE_SOURCE_MISMATCH", message).
 		WithNextSteps(config.ListContextsStep())
@@ -1222,18 +1230,31 @@ func unreliableError(l *credstore.Lookup) error {
 // (whose stored secret only a lookup could find) or another context on the
 // service holds a login of its own under the destination's scheme. With a
 // supplied scheme only the latter counts. runtimeUsername is a username the
-// invocation supplied.
-func MayReuse(target Context, contexts []Context, runtimeUsername string, schemeSupplied bool) bool {
+// invocation supplied; valid reports whether the destination stays a valid
+// configuration under a scheme (nil accepts every scheme).
+func MayReuse(target Context, contexts []Context, runtimeUsername string, schemeSupplied bool, valid func(scheme string) bool) bool {
 	if target.Service == "" || !auth.NeedsCredential(target.Scheme) || runtimeUsername != "" {
 		return false
 	}
 	if auth.UsesUsername(target.Scheme) && target.Username != "" {
 		return false
 	}
+	if valid == nil {
+		valid = func(string) bool { return true }
+	}
 	if !schemeSupplied {
 		for _, s := range auth.SchemeNames() {
-			if s != target.Scheme && auth.NeedsCredential(s) {
+			if s != target.Scheme && auth.NeedsCredential(s) && valid(s) {
 				return true
+			}
+		}
+		if auth.UsesUsername(target.Scheme) {
+			// A stored secret under the destination's own scheme pairs with any
+			// username recorded on the service.
+			for _, c := range contexts {
+				if c.Service == target.Service && !strings.EqualFold(c.Name, target.Name) && c.Username != "" {
+					return true
+				}
 			}
 		}
 	}
