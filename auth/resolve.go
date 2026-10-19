@@ -31,13 +31,22 @@ type Request struct {
 // takes precedence; otherwise it is loaded from the store. A scheme of Kind
 // None resolves without touching the store.
 func Resolve(req Request, store *credstore.Store) (Credential, error) {
+	cred, _, err := ResolveLookup(req, store)
+	return cred, err
+}
+
+// ResolveLookup is Resolve that also reports what the store answered, so a
+// caller can judge how far the answer can be trusted. The Lookup is the zero
+// value when the store was not consulted.
+func ResolveLookup(req Request, store *credstore.Store) (Credential, credstore.Lookup, error) {
+	var l credstore.Lookup
 	scheme := req.Scheme
 	if scheme == "" {
 		scheme = product().DefaultScheme
 	}
 	cred := Credential{Scheme: scheme, Username: req.Username, Secret: req.Secrets[scheme]}
 	if !cred.NeedsSecret() {
-		return cred, cred.Validate()
+		return cred, l, cred.Validate()
 	}
 
 	if cred.Secret == "" && store != nil && req.BaseURL != "" {
@@ -45,24 +54,24 @@ func Resolve(req Request, store *credstore.Store) (Credential, error) {
 		if req.LookupURL != nil {
 			var err error
 			if lookupBase, err = req.LookupURL(); err != nil {
-				return Credential{}, err
+				return Credential{}, l, err
 			}
 		}
-		loaded, err := store.Load(AccountKey(lookupBase, scheme))
-		switch {
+		l = store.Lookup(AccountKey(lookupBase, scheme))
+		switch err := l.Err(); {
 		case err == nil:
-			cred.Secret = loaded
+			cred.Secret = l.Secret
 		case errors.Is(err, credstore.ErrSecretNotFound):
-			return Credential{}, missingError(req.MissingSteps)
+			return Credential{}, l, missingError(req.MissingSteps)
 		default:
-			return Credential{}, inaccessibleError(err)
+			return Credential{}, l, inaccessibleError(err)
 		}
 	}
 
 	if err := cred.Validate(); err != nil {
-		return Credential{}, err
+		return Credential{}, l, err
 	}
-	return cred, nil
+	return cred, l, nil
 }
 
 // Save stores a credential's secret for later resolution and returns the
@@ -96,6 +105,11 @@ func HostRecovery() cerrors.Recovery {
 	}
 }
 
+// MissingError is the CREDENTIAL_NOT_VISIBLE_OR_MISSING error Resolve returns
+// when no stored secret is visible. last replaces the product's MissingStep
+// when it is not nil.
+func MissingError(last []string) *cerrors.CLIError { return missingError(last) }
+
 func missingError(last []string) *cerrors.CLIError {
 	p := product()
 	if last == nil {
@@ -107,6 +121,10 @@ func missingError(last []string) *cerrors.CLIError {
 		WithNextSteps(append(append([]string{hostRetryStep}, nonEmpty(p.Doctor)...), last...)...).
 		WithRecovery(HostRecovery())
 }
+
+// InaccessibleError is the CREDENTIAL_STORE_INACCESSIBLE error Resolve
+// returns when the store cannot be read.
+func InaccessibleError(err error) *cerrors.CLIError { return inaccessibleError(err) }
 
 func inaccessibleError(err error) *cerrors.CLIError {
 	p := product()

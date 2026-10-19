@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `reuse`: the `auth reuse` decision every CLI carried in its own
+  `internal/app/auth_reuse.go`, rewritten for the family standard's "Reuse an
+  existing login". A CLI describes its stored contexts (`Context`: service
+  identity, credential-key spelling, scheme, username) and supplies
+  resolution, verification (optionally returning the server-side `Account`)
+  and persistence; `Run` decides. Sources are considered in three steps
+  (contexts under the destination's scheme, long-lived credentials under any
+  scheme, browser sessions) and include secrets stored for the destination's
+  service that no context points at, paired with the usernames recorded on
+  the service. A username is an identity only under a scheme that sends it.
+  The first step keeps the earlier behavior except for two pre-access
+  exclusions and a stand-in lookup; every other check runs after it, within
+  one deadline (`DefaultWindow`, narrowed by the request timeout), adopts only
+  on reliable evidence, and otherwise returns the earlier result, errors
+  included. `--from-scheme` selects a stored secret, and an explicitly
+  selected long-lived source may replace a browser session. The result adds
+  `scheme`, `username`, `account`, `account_name` and `next_steps`;
+  `AUTH_REUSE_AMBIGUOUS` adds `details.candidates`. `MayReuse` is the offline
+  check that decides whether a sign-in step should list `auth reuse` first.
+- `credstore`: `Store.Lookup` reports what the keychain and the file each
+  answered (`Hit`, `Miss`, `Failed`, `Skipped`). `Load` is built on it and
+  returns what it returned before.
+- `auth`: `Scheme.Session` marks a captured browser session; `UsesUsername`,
+  `IsSession`, `NeedsCredential` and `SchemeNames` describe the registered
+  schemes; `ResolveLookup` is `Resolve` that also returns the store's answer;
+  `MissingError` and `InaccessibleError` expose the two store errors.
+- `config`: `RegisteredWords` returns the command wording a CLI registered.
+
 ## [0.4.0] - 2026-10-14
 
 ### Added

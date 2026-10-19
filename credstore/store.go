@@ -157,34 +157,8 @@ func (s *Store) Save(account, secret string) (string, error) {
 // Load retrieves the secret for account, trying the keychain then the file.
 // It returns ErrSecretNotFound when neither holds a value.
 func (s *Store) Load(account string) (string, error) {
-	keyringErr := error(ErrSecretNotFound)
-	if s.useKeychain() {
-		var secret string
-		secret, keyringErr = s.keyring.Get(s.service, account)
-		if keyringErr == nil {
-			return secret, nil
-		}
-	}
-
-	// A file fallback may still be usable when the platform keychain is locked
-	// or unavailable, so try it before surfacing the keychain failure.
-	secret, fileErr := s.fileLoad(account)
-	if fileErr == nil {
-		return secret, nil
-	}
-
-	keyringMissing := secretMissing(keyringErr)
-	fileMissing := errors.Is(fileErr, ErrSecretNotFound)
-	switch {
-	case keyringMissing && fileMissing:
-		return "", ErrSecretNotFound
-	case !keyringMissing && fileMissing:
-		return "", &StoreAccessError{Backend: BackendKeychain, Err: keyringErr}
-	case keyringMissing:
-		return "", &StoreAccessError{Backend: BackendFile, Err: fileErr}
-	default:
-		return "", &StoreAccessError{Backend: "keychain,file", Err: errors.Join(keyringErr, fileErr)}
-	}
+	l := s.Lookup(account)
+	return l.Secret, l.Err()
 }
 
 // Delete removes the secret for account from both backends. Missing entries

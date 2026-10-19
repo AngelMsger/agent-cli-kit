@@ -46,6 +46,10 @@ type Scheme struct {
 	Validate func(Credential) error
 	// Decorate, when set, replaces the decorator that sets Authorization.
 	Decorate func(Credential) transport.Decorator
+	// Session marks a secret that a browser or desktop host captured and
+	// refreshes, and that expires. Credential reuse prefers every other
+	// scheme to it.
+	Session bool
 }
 
 // Product is what a CLI registers: its schemes, and the product wording the
@@ -120,4 +124,34 @@ func schemeList() string {
 		return strings.Join(names, "")
 	}
 	return strings.Join(names[:len(names)-1], ", ") + " or " + names[len(names)-1]
+}
+
+// UsesUsername reports whether the named scheme sends a username when it
+// authenticates. Under any other scheme a stored username is only a label.
+func UsesUsername(name string) bool {
+	s, ok := lookup(name)
+	return ok && s.Kind == Basic
+}
+
+// IsSession reports whether the named scheme is a captured browser session.
+func IsSession(name string) bool {
+	s, ok := lookup(name)
+	return ok && s.Session
+}
+
+// NeedsCredential reports whether the named scheme is registered and needs a
+// stored secret, which is what makes it a candidate for credential reuse.
+func NeedsCredential(name string) bool {
+	s, ok := lookup(name)
+	return ok && s.Kind != None
+}
+
+// SchemeNames lists the registered schemes in registration order.
+func SchemeNames() []string {
+	schemes := product().Schemes
+	names := make([]string, len(schemes))
+	for i, s := range schemes {
+		names[i] = s.Name
+	}
+	return names
 }
