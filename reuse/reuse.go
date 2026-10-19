@@ -376,7 +376,7 @@ func (r *run) settle(first outcome) (Result, error) {
 			return fallback(reason)
 		}
 		if !r.allSure(first.cands) {
-			return fallback("")
+			return r.abandon()
 		}
 	}
 	r.earlier = append(r.earlier, first.cands...)
@@ -404,7 +404,7 @@ func (r *run) settle(first outcome) (Result, error) {
 			return r.finish(out)
 		}
 		if !r.allSure(out.cands) {
-			return fallback("")
+			return r.abandon()
 		}
 		r.earlier = append(r.earlier, out.cands...)
 	}
@@ -430,6 +430,15 @@ func (r *run) giveUp(reason string) (Result, error) {
 		res.Reason = reason
 	}
 	return res, nil
+}
+
+// abandon returns the earlier answer unchanged when the new work cannot go on
+// on reliable evidence: an error it had resolved provisionally stands again.
+func (r *run) abandon() (Result, error) {
+	if r.origErr != nil {
+		return r.result, r.origErr
+	}
+	return r.origResult, nil
 }
 
 // allSure reports whether every source is reliably unusable now.
@@ -721,8 +730,17 @@ func (r *run) conclude(out outcome, newWork bool) outcome {
 		return out
 	}
 	if newWork && !r.evidenceFor(out.cands, matches) {
-		out.abstain = "the credential store view cannot confirm that this context has no login of its own"
-		return out
+		// The stored-secret lookups may still supply the witness.
+		if !r.req.SchemeSupplied {
+			if reason := r.preloadStored(); reason != "" {
+				out.abstain = reason
+				return out
+			}
+		}
+		if !r.evidenceFor(out.cands, matches) {
+			out.abstain = "the credential store view cannot confirm that this context has no login of its own"
+			return out
+		}
 	}
 	if len(matches) > 1 {
 		out.ambiguous = matches
@@ -966,9 +984,12 @@ func (r *run) unchangedSource(c *candidate, newWork bool) (unchanged, ok bool) {
 	}
 	if r.targetLookup != nil {
 		key := r.req.Key(r.target.KeyBase, r.target.Scheme)
-		l, ok := r.req.Lookup(key), true
+		var l credstore.Lookup
+		ok := true
 		if newWork {
 			l, ok = r.lookupWithin(key)
+		} else {
+			l = r.req.Lookup(key)
 		}
 		if !ok {
 			return false, false

@@ -49,6 +49,7 @@ type env struct {
 	file            map[string]string
 	keychainSkipped bool
 	keychainFailed  bool
+	keychainFails   map[string]bool   // keys whose keychain lookup fails
 	accounts        map[string]string // secret (and "user|secret" for basic) → account ID
 	verifyErr       map[string]error
 	slowVerify      map[string]time.Duration
@@ -65,7 +66,7 @@ type env struct {
 func newEnv() *env {
 	return &env{keychain: map[string]string{}, file: map[string]string{}, accounts: map[string]string{},
 		verifyErr: map[string]error{}, slowVerify: map[string]time.Duration{}, slowLookup: map[string]time.Duration{},
-		stallAt: map[string]int{}, lookupsOf: map[string]int{}}
+		stallAt: map[string]int{}, lookupsOf: map[string]int{}, keychainFails: map[string]bool{}}
 }
 
 func key(base, scheme string) string { return auth.AccountKey(base, scheme) }
@@ -83,7 +84,7 @@ func (e *env) lookup(k string) credstore.Lookup {
 	switch {
 	case e.keychainSkipped:
 		l.Keychain = credstore.Skipped
-	case e.keychainFailed:
+	case e.keychainFailed || e.keychainFails[k]:
 		l.Keychain, l.KeychainErr = credstore.Failed, errors.New("locked")
 	default:
 		if v, ok := e.keychain[k]; ok {
@@ -726,5 +727,75 @@ func TestSuggestedCommandsKeepTheSelection(t *testing.T) { // impl B6
 	steps := strings.Join(cerrors.AsCLIError(err).NextSteps, "\n")
 	if !strings.Contains(steps, "--from-scheme basic --from-context 'x'") || !strings.Contains(steps, "--from-scheme basic --from-context 'y'") {
 		t.Fatalf("ambiguity steps: %s", steps)
+	}
+}
+
+// A provisionally resolved first-step error stands again when a later step
+// cannot judge its sources reliably.
+func TestUnreliableLaterEvidenceKeepsTheBaselineError(t *testing.T) { // impl round 2 B1
+	e := liveEnv()
+	e.keychain[key(dev, "token")] = "stale-token" // a keychain hit: the witness
+	delete(e.keychain, key(dev, "basic"))
+	e.keychainFails[key(dev, "basic")] = true
+	e.file[key(dev, "basic")] = "stale-pw" // rejected, but read past a failing keychain
+	_, err := Run(e.request("dev", liveOpenObserve()...))
+	if codeOf(err) != "CREDENTIAL_NOT_VISIBLE_OR_MISSING" {
+		t.Fatalf("got %v", err)
+	}
+}
+
+// A working first-step source is adopted once the stored-secret lookups supply
+// the witness its evidence needs.
+func TestWitnessForAWorkingFirstStepSource(t *testing.T) { // impl round 2 B2
+	alt := "https://o2.dev.example.com:443"
+	contexts := []Context{ctxOf("test", dev, "session", "me"), {Name: "alt", Service: dev + "|default", KeyBase: alt, Scheme: "session"}}
+	e := newEnv()
+	e.file[key(alt, "session")] = "session:ok"
+	e.accounts["session:ok"] = ""
+	e.keychain[key(dev, "basic")] = "unrelated" // only a witness; no label pairs with it
+	res, err := Run(e.request("test", contexts...))
+	if err != nil || res.State != StateReused || res.SourceContext != "alt" {
+		t.Fatalf("got %+v, %v", res, err)
+	}
+}
+
+func TestDestinationRecheckStaysWithinTheDeadline(t *testing.T) { // impl round 2 B3
+	e := liveEnv()
+	k := key(ops, "session")
+	e.stallAt[k], e.stall = 2, 2*time.Second // the destination check, then its recheck
+	req := e.request("prod-jdy", liveOpenObserve()...)
+	req.Window = 200 * time.Millisecond
+	started := time.Now()
+	res, err := Run(req)
+	if err != nil || res.State != StateUnavailable || e.persisted != nil || time.Since(started) > time.Second {
+		t.Fatalf("got %+v, %v after %v (lookups of %s: %d)", res, err, time.Since(started), k, e.lookupsOf[k])
+	}
+}
+
+// A destination whose own entry changes between verification and the write is
+// left alone, whether its secret or its backend changed.
+func TestDestinationChangeStopsTheWrite(t *testing.T) { // impl round 2 N2
+	for _, change := range []string{"secret", "backend"} {
+		t.Run(change, func(t *testing.T) {
+			e := liveEnv()
+			k := key(ops, "session")
+			e.keychain[k] = "session:expired"
+			verify := e.verify
+			req := e.request("prod-jdy", liveOpenObserve()...)
+			req.Verify = func(ctx context.Context, spec Spec, c auth.Credential) (Account, error) {
+				if c.Scheme == "basic" {
+					if change == "secret" {
+						e.keychain[k] = "session:refreshed"
+					} else {
+						e.file[k] = e.keychain[k]
+						delete(e.keychain, k)
+					}
+				}
+				return verify(ctx, spec, c)
+			}
+			if _, err := Run(req); codeOf(err) != "AUTH_REUSE_CREDENTIAL_CHANGED" || e.persisted != nil {
+				t.Fatalf("got %v, persisted %+v", err, e.persisted)
+			}
+		})
 	}
 }
