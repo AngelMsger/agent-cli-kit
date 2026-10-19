@@ -588,3 +588,12 @@ func TestALoginIsTriedOnce(t *testing.T) {
 		t.Fatalf("got %+v, %v after %d verifications", res, err, e.verifies)
 	}
 }
+
+func TestAnUnauthenticatedContextIsNoSource(t *testing.T) {
+	e := newEnv()
+	req := e.request("team", ctxOf("team", ops, "basic", ""), ctxOf("open", ops, "none", ""))
+	req.From = "open"
+	if _, err := Run(req); codeOf(err) != "AUTH_REUSE_SOURCE_MISMATCH" || e.verifies != 0 {
+		t.Fatalf("got %v after %d verifications", err, e.verifies)
+	}
+}

@@ -254,6 +254,9 @@ func (r *run) run() (Result, error) {
 		if from.Service != target.Service || (req.SchemeSupplied && req.FromScheme == "" && from.Scheme != target.Scheme) {
 			return r.result, r.sourceMismatch("the source context belongs to a different service or scope")
 		}
+		if req.FromScheme == "" && !auth.NeedsCredential(from.Scheme) {
+			return r.result, r.sourceMismatch("the source context does not use authentication")
+		}
 	}
 	if req.FromScheme != "" {
 		if err := (auth.Credential{Scheme: req.FromScheme}).Validate(); err != nil && cerrors.AsCLIError(err).Code == "AUTH_BAD_SCHEME" {
