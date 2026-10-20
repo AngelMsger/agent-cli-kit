@@ -21,12 +21,13 @@ go get github.com/angelmsger/agent-cli-kit@latest
 | `errors` | Categorized `CLIError`, exit codes, HTTP status mapping and the JSON error envelope agents parse. |
 | `output` | JSON and table rendering, `--fields` projection, the list envelope with pagination and `_notice`. |
 | `transport` | HTTP client with decorators, bounded retries that replay the request body, and optional `--verbose` logging. |
-| `credstore` | Secret storage in the OS keychain with a protected file fallback. Probes macOS for a default keychain first. |
+| `credstore` | Secret storage in the OS keychain with a protected file fallback. Probes macOS for a default keychain first. `Lookup` reports what each backend answered. |
 | `auth` | Auth schemes, the `Authorization` header, keychain account keys, and `Resolve`, which finds a secret and returns recovery errors an agent can act on when the sandbox cannot see it. |
 | `config` | Layered settings (flags, environment, `.env`, a YAML file of named contexts, defaults) with the layer that supplied each value, context selection, the atomic file write, team presets (`set-context`), and the context hints. |
 | `cliflags` | Corrects common agent mistakes in argv (`--flag value` vs `--flag=value`, literal `\n` in body flags). |
 | `update` | Cached check against a repository's latest GitHub release. |
 | `skill` | Read-only Skill version, load-state and installation inspection over caller-supplied `fs.FS`, plus agent integration directory metadata. |
+| `reuse` | The `auth reuse` decision: which stored login a context adopts, in what order, on what evidence and within what deadline. A CLI describes its contexts and supplies resolution, verification and the config write. |
 
 ## What each CLI supplies
 
