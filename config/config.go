@@ -142,5 +142,9 @@ func field(key string) (Field, bool) {
 // step renders a command as the user types it.
 func step(command string) string { return schema().Words.App + " " + command }
 
+// RegisteredWords returns the command wording the CLI registered, for packages
+// that build recovery steps outside this one.
+func RegisteredWords() Words { return schema().Words }
+
 // ListContextsStep is the command that lists contexts, as a next step.
 func ListContextsStep() string { return step(schema().Words.ListContexts) }
