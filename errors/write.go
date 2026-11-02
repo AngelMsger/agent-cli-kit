@@ -39,15 +39,14 @@ type WriteTarget struct {
 }
 
 // FromWrite classifies the error a write request returned. A nil error stays
-// nil. A failure that shows the write was not applied (usage, auth,
-// permission, not found, conflict, and anything else the server answered
-// with a definite refusal) is returned unchanged, so its guidance and
-// retryable flag still apply. These leave the outcome unknown and are
-// rewrapped so that nothing replays them:
-//   - network, server and rate-limit failures, whether or not a response
-//     arrived;
-//   - a response that could not be decoded, except a 2xx one: that write was
-//     acknowledged and reports CodeWriteSucceededResponseInvalid.
+// nil. Only a definite refusal, which shows the write was not applied, is
+// returned unchanged, so its guidance and retryable flag still apply: a
+// usage, config, auth, permission, not-found or conflict error. Everything
+// else leaves the outcome unknown and is rewrapped so that nothing replays
+// it: network, server, rate-limit, parse and internal errors, and any error
+// that is not a CLIError, such as a raw context.DeadlineExceeded or
+// *url.Error. One exception: a 2xx response that could not be decoded was
+// acknowledged, and reports CodeWriteSucceededResponseInvalid.
 //
 // The rewrapped error keeps the cause's category, code and HTTP status, is
 // not retryable, and has the target's read steps as its next steps.
@@ -57,13 +56,12 @@ func FromWrite(err error, target WriteTarget) error {
 	}
 	ce := AsCLIError(err)
 	switch ce.Category {
+	case CategoryUsage, CategoryConfig, CategoryAuth, CategoryPermission, CategoryNotFound, CategoryConflict:
+		return err
 	case CategoryParse:
 		if ce.HTTPStatus >= 200 && ce.HTTPStatus < 300 {
 			return WriteSucceeded(err, CodeWriteSucceededResponseInvalid, "its response could not be decoded", target)
 		}
-	case CategoryNetwork, CategoryServer, CategoryRateLimit:
-	default:
-		return err
 	}
 	return writeOutcome(err, ce.Code, "Write outcome is unknown for "+target.Description, target)
 }
@@ -98,8 +96,9 @@ func writeOutcome(err error, code, message string, target WriteTarget) *CLIError
 	return out
 }
 
-// ShellArg quotes value as one POSIX shell word, for the commands an error
-// suggests as next steps: ShellArg("it's") is 'it'"'"'s'.
+// ShellArg quotes value as one word for a POSIX shell (sh, bash, zsh), for the
+// commands an error suggests as next steps: ShellArg("it's") is 'it'"'"'s'.
+// The result is not valid quoting for cmd.exe or PowerShell.
 func ShellArg(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", `'"'"'`) + "'"
 }

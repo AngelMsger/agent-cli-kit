@@ -103,6 +103,31 @@ func TestConfirm(t *testing.T) {
 	if ok, err := (Prompter{In: failingReader{readErr}, Out: io.Discard}).Confirm("Delete?"); ok || !errors.Is(err, readErr) {
 		t.Fatalf("Confirm on a read failure = %v, %v; want false, the error", ok, err)
 	}
+	// A "y" cut off by a read failure is not an answer.
+	cut := io.MultiReader(strings.NewReader("y"), failingReader{readErr})
+	if ok, err := (Prompter{In: cut, Out: io.Discard}).Confirm("Delete?"); ok || !errors.Is(err, readErr) {
+		t.Fatalf("Confirm on a partial answer then a read failure = %v, %v; want false, the error", ok, err)
+	}
+}
+
+// When the question cannot be shown, nothing is read: an answer to an
+// invisible question is not consent.
+func TestPromptsStopWhenTheQuestionCannotBeShown(t *testing.T) {
+	writeErr := errors.New("stderr closed")
+	in := strings.NewReader("y\n")
+	p := Prompter{In: in, Out: failingWriter{writeErr}}
+	if ok, err := p.Confirm("Delete?"); ok || !errors.Is(err, writeErr) {
+		t.Fatalf("Confirm = %v, %v; want false, the write error", ok, err)
+	}
+	if _, err := p.Line("Name", ""); !errors.Is(err, writeErr) {
+		t.Fatalf("Line = %v, want the write error", err)
+	}
+	if _, err := p.Secret("Token"); !errors.Is(err, writeErr) {
+		t.Fatalf("Secret = %v, want the write error", err)
+	}
+	if in.Len() != len("y\n") {
+		t.Fatal("a prompt read input after failing to show its question")
+	}
 }
 
 // A secret from a pipe has no hidden read, so it arrives as a plain line.
@@ -127,6 +152,15 @@ func TestSecretFromAPipe(t *testing.T) {
 	}
 }
 
+// Only the end of input completes an unterminated line; any other read failure
+// is returned, so a truncated answer or secret is never used.
+func TestReadLineReturnsReadFailures(t *testing.T) {
+	readErr := errors.New("read failed")
+	if line, err := ReadLine(io.MultiReader(strings.NewReader("s3cr"), failingReader{readErr})); !errors.Is(err, readErr) || line != "" {
+		t.Fatalf("ReadLine = %q, %v; want no line and the error", line, err)
+	}
+}
+
 // ReadLine must leave the rest of the input for the next reader, which is why
 // it reads a byte at a time instead of buffering.
 func TestReadLineStopsAtTheNewline(t *testing.T) {
@@ -145,3 +179,7 @@ func TestReadLineStopsAtTheNewline(t *testing.T) {
 type failingReader struct{ err error }
 
 func (f failingReader) Read([]byte) (int, error) { return 0, f.err }
+
+type failingWriter struct{ err error }
+
+func (f failingWriter) Write([]byte) (int, error) { return 0, f.err }

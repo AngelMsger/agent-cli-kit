@@ -113,23 +113,24 @@ A write that fails may still have been applied, so repeating it can apply it
 twice. The family rule is that an uncertain write is reconciled with a read
 first. A CLI passes each write's error through `errors.FromWrite` with a
 `WriteTarget`: what the write changes, and the bounded read commands that show
-it (quote user values with `errors.ShellArg`). A definite refusal (usage, auth,
-permission, not found, conflict) comes back unchanged. A network, server or
-rate-limit failure, or a response that could not be decoded, comes back as
-"Write outcome is unknown for …": not retryable, the hint "Do not repeat the
-write", and the read commands as next steps. A 2xx response that could not be
-decoded, `errors.MissingWriteIdentity` (no ID or queue location in the
-response) and `errors.WriteSucceeded` (a later read failed) report a write that
+it (quote user values with `errors.ShellArg`, for POSIX shells). Only a definite
+refusal (usage, config, auth, permission, not found, conflict) comes back
+unchanged. Anything else, including an error that is not a `CLIError`, comes
+back as "Write outcome is unknown for …": not retryable, the hint "Do not
+repeat the write", and the read commands as next steps. A 2xx response that
+could not be decoded, `errors.MissingWriteIdentity` (no ID or queue location
+in the response) and `errors.WriteSucceeded` (a later read failed) report a write that
 was applied but whose result cannot be shown, under `WRITE_SUCCEEDED_*` codes
 that keep the identity of what was changed.
 
 ## Read-only mode and prompts
 
 `errors.ReadOnlyBlocked` builds the one `READONLY_BLOCKED` error: permission,
-exit 5, not retryable, "nothing was sent", `--allow-writes` only for an
-intended write, and the switches the CLI names in `ReadOnlyMode` (its
-environment variable, its config file, and `--dry-run` when its writes have
-it).
+exit 5, not retryable, "nothing was sent". Read-only mode is the user's
+setting, and agents act on next steps, so the steps are only `--dry-run` (when
+the CLI's writes have it) and `--allow-writes` for a write the user authorized.
+The hint names the switches the CLI lists in `ReadOnlyMode` (its environment
+variable and config file) as the user's to change.
 
 `terminal.Is` asks the operating system whether a stream is a terminal. A file
 mode check is not enough: `/dev/null`, which cron, CI and agent runners often

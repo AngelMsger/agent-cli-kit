@@ -21,27 +21,36 @@ type ReadOnlyMode struct {
 // ReadOnlyBlocked reports that read-only mode refused op before anything was
 // sent. op names the write, such as "CreateIssue" or "trigger a build". The
 // error is a permission error (exit 5) and not retryable: repeating the same
-// command is refused the same way. The hint says the write was not sent and
-// that --allow-writes is for a write that is intended, and the next steps list
-// --dry-run (when the CLI has it), --allow-writes, and the switches that turn
-// the mode off.
+// command is refused the same way.
+//
+// Read-only mode is the user's safety setting, and agents act on next steps,
+// so the steps never turn it off. The steps are --dry-run (when the CLI has
+// it) and --allow-writes, conditioned on the user authorizing this write; the
+// standard allows only that one-invocation override. The hint names the
+// switches the user set, as the user's to change.
 func ReadOnlyBlocked(op string, mode ReadOnlyMode) *CLIError {
-	hint := "Read-only mode is on, so nothing was sent. "
 	var steps []string
 	if mode.DryRun {
-		hint += "Preview the request with --dry-run. "
 		steps = append(steps, "Add --dry-run to preview the request without sending it")
 	}
-	hint += "Re-run with --allow-writes only when this write is intended; it lifts read-only mode for one invocation."
-	steps = append(steps, "Add --allow-writes to permit writes for this invocation")
-	if mode.Env != "" {
-		steps = append(steps, "Unset "+mode.Env+" to turn read-only mode off")
-	}
-	if mode.ConfigFile != "" {
-		steps = append(steps, "Set defaults.read_only=false in "+mode.ConfigFile+" to turn read-only mode off")
-	}
+	steps = append(steps, "Only if the user authorized this write, re-run with --allow-writes")
 	return New(CategoryPermission, CodeReadOnlyBlocked,
 		fmt.Sprintf("operation %q blocked: read-only mode is enabled", op)).
-		WithHint(hint).
+		WithHint("Read-only mode is on, so nothing was sent. The user turned it on" + switches(mode) +
+			", and only the user turns it off. --allow-writes lifts it for one invocation and is for a write the user authorized.").
 		WithNextSteps(steps...)
+}
+
+// switches names where read-only mode can be on, without claiming that
+// changing one of them turns it off: the other may still be set.
+func switches(mode ReadOnlyMode) string {
+	switch {
+	case mode.Env != "" && mode.ConfigFile != "":
+		return " (" + mode.Env + " or defaults.read_only in " + mode.ConfigFile + ")"
+	case mode.Env != "":
+		return " (" + mode.Env + " or defaults.read_only)"
+	case mode.ConfigFile != "":
+		return " (defaults.read_only in " + mode.ConfigFile + ")"
+	}
+	return ""
 }

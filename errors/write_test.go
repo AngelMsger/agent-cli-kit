@@ -1,8 +1,10 @@
 package errors
 
 import (
+	"context"
 	"encoding/json"
 	stderrors "errors"
+	"net/url"
 	"testing"
 )
 
@@ -40,6 +42,12 @@ func TestFromWriteUnknownOutcome(t *testing.T) {
 		"rate limit":    New(CategoryRateLimit, "HTTP_429", "slow down").WithHTTPStatus(429),
 		"redirect":      New(CategoryServer, "HTTP_302", "unexpected redirect").WithHTTPStatus(302),
 		"non-2xx parse": New(CategoryParse, "DECODE", "bad error body").WithHTTPStatus(502),
+		"internal":      New(CategoryInternal, "INTERNAL", "unexpected state"),
+		// Errors a caller passes in without classifying them first.
+		"raw deadline": context.DeadlineExceeded,
+		"raw canceled": context.Canceled,
+		"raw url.Error": &url.Error{Op: "Post", URL: "https://jira.example/rest/api/2/issue",
+			Err: stderrors.New("connection reset by peer")},
 	}
 	for name, cause := range causes {
 		t.Run(name, func(t *testing.T) {
@@ -58,20 +66,17 @@ func TestFromWriteAcknowledgedButUndecodable(t *testing.T) {
 }
 
 // A definite refusal proves nothing was written, so FromWrite leaves it alone:
-// its guidance, code and retryable flag reach the caller unchanged.
+// its guidance, code and retryable flag reach the caller unchanged. Every other
+// category, and any error that is not classified, leaves the outcome unknown.
 func TestFromWriteKeepsDefiniteRefusals(t *testing.T) {
 	for _, cat := range []Category{CategoryUsage, CategoryConfig, CategoryAuth, CategoryPermission,
-		CategoryNotFound, CategoryConflict, CategoryInternal} {
+		CategoryNotFound, CategoryConflict} {
 		t.Run(string(cat), func(t *testing.T) {
 			cause := New(cat, "REFUSED", "refused")
 			if got := FromWrite(cause, testTarget); got != cause {
 				t.Fatalf("FromWrite rewrote %s: %+v", cat, got)
 			}
 		})
-	}
-	plain := stderrors.New("not a CLIError")
-	if got := FromWrite(plain, testTarget); got != plain {
-		t.Fatalf("FromWrite rewrote an unclassified error: %+v", got)
 	}
 	if FromWrite(nil, testTarget) != nil {
 		t.Fatal("FromWrite(nil) is not nil")
