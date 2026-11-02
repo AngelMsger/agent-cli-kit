@@ -6,9 +6,10 @@ This file is the canonical instruction source for coding agents working in
 ## What this is
 
 Shared Go packages used by every CLI in the AngelMsger family. A change here
-reaches seven CLIs at once, so it is reviewed as a change to all of them. The
-family's design principles and documentation live in
-[agent-clis](https://github.com/AngelMsger/agent-clis); this repository holds code.
+reaches all eight CLIs at once, so it is reviewed as a change to all of them.
+The family's design principles and documentation live in
+[agent-clis-workspace](https://github.com/AngelMsger/agent-clis-workspace); this
+repository holds code.
 
 ## Ground rules
 
