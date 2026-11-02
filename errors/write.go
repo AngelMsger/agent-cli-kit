@@ -48,8 +48,14 @@ type WriteTarget struct {
 // *url.Error. One exception: a 2xx response that could not be decoded was
 // acknowledged, and reports CodeWriteSucceededResponseInvalid.
 //
-// The rewrapped error keeps the cause's category, code and HTTP status, is
-// not retryable, and has the target's read steps as its next steps.
+// The rewrapped error keeps the cause's category, code, HTTP status and
+// details, is not retryable, and has the target's read steps as its next
+// steps.
+//
+// The category is read from the outermost CLIError in err's chain, as
+// AsCLIError finds it. A CLI that wraps a transport failure in a refusal
+// category, or joins a refusal before it, hides that failure from FromWrite;
+// report a write the server confirmed with WriteSucceeded instead.
 func FromWrite(err error, target WriteTarget) error {
 	if err == nil {
 		return nil
@@ -70,9 +76,9 @@ func FromWrite(err error, target WriteTarget) error {
 // be delivered, because problem happened: "its response was incomplete",
 // "reading the updated issue failed". code is one of the CodeWriteSucceeded*
 // constants or a CLI's own WRITE_SUCCEEDED_* code. The error keeps cause as
-// its cause and takes its category and HTTP status, so the exit code tells
-// what went wrong after the write; it is not retryable, and its next steps
-// are the target's read steps.
+// its cause and takes its category, HTTP status and details, so the exit code
+// tells what went wrong after the write. It is not retryable, and its next
+// steps are the target's read steps.
 func WriteSucceeded(cause error, code, problem string, target WriteTarget) *CLIError {
 	return writeOutcome(cause, code, "Write succeeded for "+target.Description+", but "+problem, target)
 }
@@ -90,6 +96,7 @@ func writeOutcome(err error, code, message string, target WriteTarget) *CLIError
 	cause := AsCLIError(err)
 	out := Wrap(err, cause.Category, code, message+": "+cause.Message).
 		WithHTTPStatus(cause.HTTPStatus).
+		WithDetails(cause.Details).
 		WithHint(writeHint).
 		WithNextSteps(target.ReadSteps...)
 	out.Retryable = false

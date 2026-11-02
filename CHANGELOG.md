@@ -15,7 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   conflict) unchanged. Every other failure, including one that is not a
   `CLIError` such as a raw context or `*url.Error`, becomes "Write outcome is
   unknown": not retryable, hint "Do not repeat the write", the target's read
-  commands as next steps, and the cause's category, code and HTTP status kept.
+  commands as next steps, and the cause's category, code, HTTP status and
+  details kept.
   The exception is a 2xx response that could not be decoded: that write was
   applied and reports `WRITE_SUCCEEDED_RESPONSE_INVALID`. `WriteSucceeded`
   and `MissingWriteIdentity` report other applied writes whose result cannot

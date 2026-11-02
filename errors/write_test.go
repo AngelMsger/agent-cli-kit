@@ -93,6 +93,20 @@ func TestWriteSucceededKeepsTheFollowUpFailure(t *testing.T) {
 	}
 }
 
+// Details are data, not retry instructions, so a rewrapped error keeps them.
+func TestWriteOutcomeKeepsDetails(t *testing.T) {
+	details := map[string]string{"request_id": "r-42"}
+	cause := New(CategoryServer, "HTTP_503", "temporarily unavailable").WithHTTPStatus(503).WithDetails(details)
+	for name, err := range map[string]error{
+		"unknown":   FromWrite(cause, testTarget),
+		"succeeded": WriteSucceeded(cause, CodeWriteSucceededReadFailed, "reading it back failed", testTarget),
+	} {
+		if got := AsCLIError(err).Details; got == nil || got.(map[string]string)["request_id"] != "r-42" {
+			t.Errorf("%s: details = %v, want the cause's", name, got)
+		}
+	}
+}
+
 func TestMissingWriteIdentity(t *testing.T) {
 	err := MissingWriteIdentity(testTarget)
 	if err.Code != CodeWriteSucceededResponseInvalid || err.Category != CategoryParse || err.Retryable {
