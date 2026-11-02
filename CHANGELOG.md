@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `errors`: the family's write-outcome rule, moved from jira-cli so Bitbucket,
+  Confluence and Jenkins apply the same one. `FromWrite(err, WriteTarget)`
+  returns a definite refusal (usage, config, auth, permission, not found,
+  conflict) unchanged. Every other failure, including one that is not a
+  `CLIError` such as a raw context or `*url.Error`, becomes "Write outcome is
+  unknown": not retryable, hint "Do not repeat the write", the target's read
+  commands as next steps, and the cause's category, code, HTTP status and
+  details kept.
+  The exception is a 2xx response that could not be decoded: that write was
+  applied and reports `WRITE_SUCCEEDED_RESPONSE_INVALID`. `WriteSucceeded`
+  and `MissingWriteIdentity` report other applied writes whose result cannot
+  be shown (`WRITE_SUCCEEDED_RESPONSE_INVALID`, `WRITE_SUCCEEDED_READ_FAILED`).
+  `ShellArg` quotes a value for a suggested POSIX shell command. jira-cli
+  prints the same errors on this rule as before, except that an internal error
+  during a write (such as failing to encode the request) is now an unknown
+  outcome too.
+- `errors.ReadOnlyBlocked`: one `READONLY_BLOCKED` wording for the family.
+  The next steps offer `--dry-run` (when the CLI has it) and `--allow-writes`
+  only for a write the user authorized; they never turn read-only mode off,
+  which is the user's setting. The hint names the CLI's switches from
+  `ReadOnlyMode` (environment variable, config file) as the user's to change.
+  The code, category and exit code are unchanged; the message, hint and next
+  steps change in each CLI that adopts it.
+- `terminal`: `Is` asks the operating system whether a stream is a terminal,
+  so `/dev/null` and pipes are not; `Prompter` asks for a line, a choice, a
+  yes/no confirmation or a hidden secret on the command's own streams, and
+  reads nothing when its question cannot be written; `ReadLine` never reads
+  past the newline, and a read failure other than the end of input returns
+  its error rather than a truncated line. Replaces the copies in each CLI.
+
 ## [0.5.0] - 2026-10-24
 
 ### Added
