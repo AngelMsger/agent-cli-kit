@@ -8,9 +8,9 @@ import (
 	"testing"
 )
 
-// The --verbose log names each request and its outcome, never a credential:
-// no header, no body, and no password from the URL.
-func TestVerboseLogNamesTheRequestButNoCredential(t *testing.T) {
+// The --verbose log names each request and its outcome, with no header, no
+// body and no password from the URL.
+func TestVerboseLogNamesTheRequestButNoPassword(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name string

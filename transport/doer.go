@@ -22,8 +22,11 @@ type Decorator func(*http.Request)
 
 // loggingDoer wraps a Doer to log each request's method, URL and resulting
 // status (or error) to w — used by --verbose. It logs only the request line and
-// outcome, never headers or bodies, and masks a password in the URL, so
-// credentials are never written out.
+// outcome, never headers or bodies, and masks a password in the request URL.
+// The username, path and query string are written as sent, and an error is
+// written as the Doer returned it (net/http masks a URL password in its own
+// errors), so a credential stays out of the log only when it travels in a
+// header or the URL's password, as the CLIs send theirs.
 type loggingDoer struct {
 	inner Doer
 	w     io.Writer
