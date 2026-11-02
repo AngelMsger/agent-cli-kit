@@ -1,14 +1,14 @@
 # agent-cli-kit
 
 Shared Go packages for the AngelMsger CLI family: jira-cli, confluence-cli,
-bitbucket-cli, jenkins-cli, prometheus-cli, openobserve-cli and
-wecom-calendar-cli. Each CLI used to carry its own copy of these packages, and
+bitbucket-cli, jenkins-cli, prometheus-cli, openobserve-cli, wecom-calendar-cli
+and wecom-channel-cli. Each CLI used to carry its own copy of these packages, and
 the copies drifted. The kit keeps one copy, so a fix such as the macOS keychain
 probe lands once.
 
 The kit holds code only. The family's principles and rules for building CLIs
 that work well for both people and agents live in
-[agent-clis](https://github.com/AngelMsger/agent-clis).
+[agent-clis-workspace](https://github.com/AngelMsger/agent-clis-workspace).
 
 ```sh
 go get github.com/angelmsger/agent-cli-kit@latest
@@ -18,7 +18,7 @@ go get github.com/angelmsger/agent-cli-kit@latest
 
 | Package | What it does |
 |---|---|
-| `errors` | Categorized `CLIError`, exit codes, HTTP status mapping and the JSON error envelope agents parse. |
+| `errors` | Categorized `CLIError`, exit codes, HTTP status mapping and the JSON error envelope agents parse. Also the family's write-outcome rule (`FromWrite`, `WriteSucceeded`) and its one `READONLY_BLOCKED` wording (`ReadOnlyBlocked`). |
 | `output` | JSON and table rendering, `--fields` projection, the list envelope with pagination and `_notice`. |
 | `transport` | HTTP client with decorators, bounded retries that replay the request body, and optional `--verbose` logging. |
 | `credstore` | Secret storage in the OS keychain with a protected file fallback. Probes macOS for a default keychain first. `Lookup` reports what each backend answered. |
@@ -27,6 +27,7 @@ go get github.com/angelmsger/agent-cli-kit@latest
 | `cliflags` | Corrects common agent mistakes in argv (`--flag value` vs `--flag=value`, literal `\n` in body flags). |
 | `update` | Cached check against a repository's latest GitHub release. |
 | `skill` | Read-only Skill version, load-state and installation inspection over caller-supplied `fs.FS`, plus agent integration directory metadata. |
+| `terminal` | Whether a stream is an interactive terminal (`Is`), and prompts that read and write the command's own streams (`Prompter`: line, choice, confirm, hidden secret). |
 | `reuse` | The `auth reuse` decision: which stored login a context adopts, in what order, on what evidence and within what deadline. A CLI describes its contexts and supplies resolution, verification and the config write. |
 
 ## What each CLI supplies
@@ -103,8 +104,40 @@ completed pages and stdout failures emit no pagination notice. JSON envelopes
 remain unchanged. `Options.NoticeWriter` defaults to stderr;
 `Options.NextFlag` defaults to `--cursor` and controls both the NDJSON hint and
 table footer. Commands supply their actual cursor/offset and continuation flag.
-The family [wire contract](https://github.com/AngelMsger/agent-clis/blob/main/docs/agent-facing-cli-best-practices.md#42-use-stable-envelopes)
+The family [wire contract](https://github.com/AngelMsger/agent-clis-workspace/blob/main/docs/agent-facing-cli-best-practices.md#42-use-stable-envelopes)
 defines observable behavior; package tests pin serialization and ordering.
+
+## Write outcomes
+
+A write that fails may still have been applied, so repeating it can apply it
+twice. The family rule is that an uncertain write is reconciled with a read
+first. A CLI passes each write's error through `errors.FromWrite` with a
+`WriteTarget`: what the write changes, and the bounded read commands that show
+it (quote user values with `errors.ShellArg`). A definite refusal (usage, auth,
+permission, not found, conflict) comes back unchanged. A network, server or
+rate-limit failure, or a response that could not be decoded, comes back as
+"Write outcome is unknown for …": not retryable, the hint "Do not repeat the
+write", and the read commands as next steps. A 2xx response that could not be
+decoded, `errors.MissingWriteIdentity` (no ID or queue location in the
+response) and `errors.WriteSucceeded` (a later read failed) report a write that
+was applied but whose result cannot be shown, under `WRITE_SUCCEEDED_*` codes
+that keep the identity of what was changed.
+
+## Read-only mode and prompts
+
+`errors.ReadOnlyBlocked` builds the one `READONLY_BLOCKED` error: permission,
+exit 5, not retryable, "nothing was sent", `--allow-writes` only for an
+intended write, and the switches the CLI names in `ReadOnlyMode` (its
+environment variable, its config file, and `--dry-run` when its writes have
+it).
+
+`terminal.Is` asks the operating system whether a stream is a terminal. A file
+mode check is not enough: `/dev/null`, which cron, CI and agent runners often
+give as stdin, is a character device too. A CLI prompts only when
+`terminal.Is(stdin)` holds and otherwise returns a structured error naming the
+flag that answers the prompt (`--yes`, for example). `terminal.Prompter` takes
+the command's streams, so tests drive it without touching the process's
+stdin and stderr.
 
 ## Skill read core
 

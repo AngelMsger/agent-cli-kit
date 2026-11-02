@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `errors`: the family's write-outcome rule, moved from jira-cli so Bitbucket,
+  Confluence and Jenkins apply the same one. `FromWrite(err, WriteTarget)`
+  leaves a definite refusal unchanged and rewraps a network, server or
+  rate-limit failure, or an undecodable response, as "Write outcome is
+  unknown": not retryable, hint "Do not repeat the write", the target's read
+  commands as next steps, and the cause's category, code and HTTP status kept.
+  `WriteSucceeded` and `MissingWriteIdentity` report an applied write whose
+  result cannot be shown (`WRITE_SUCCEEDED_RESPONSE_INVALID`,
+  `WRITE_SUCCEEDED_READ_FAILED`). `ShellArg` quotes a value for a suggested
+  command. jira-cli prints the same errors on this rule as before.
+- `errors.ReadOnlyBlocked`: one `READONLY_BLOCKED` wording for the family. The
+  CLI names its switches in `ReadOnlyMode` (environment variable, config file,
+  `--dry-run`). The code, category and exit code are unchanged; the message,
+  hint and next steps change in each CLI that adopts it.
+- `terminal`: `Is` asks the operating system whether a stream is a terminal,
+  so `/dev/null` and pipes are not; `Prompter` asks for a line, a choice, a
+  yes/no confirmation or a hidden secret on the command's own streams;
+  `ReadLine` never reads past the newline. Replaces the copies in each CLI.
+
 ## [0.5.0] - 2026-10-24
 
 ### Added
