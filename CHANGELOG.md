@@ -39,6 +39,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   past the newline, and a read failure other than the end of input returns
   its error rather than a truncated line. Replaces the copies in each CLI.
 
+### Fixed
+
+- `transport`: the `Verbose` request log masks a password in the request URL
+  (`https://user:xxxxx@host/...`), as `net/http` error messages already do, so
+  a base URL with a password in it no longer prints the password under
+  `--verbose`. The username, path and query string are still written as sent,
+  and an error as the Doer returned it. The log line is otherwise unchanged.
+
 ## [0.5.0] - 2026-10-24
 
 ### Added
