@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `transport`: the `Verbose` request log masks a password in the request URL
+  (`https://user:xxxxx@host/...`), as `net/http` error messages already do. A
+  base URL with credentials in it no longer prints them under `--verbose`. The
+  log line is otherwise unchanged.
+
 ## [0.5.0] - 2026-10-24
 
 ### Added
