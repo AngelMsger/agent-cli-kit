@@ -103,3 +103,60 @@ func TestRedirectLoopIsBoundedWithoutRetry(t *testing.T) {
 		t.Fatalf("requests=%d, want 10 including all retries", got)
 	}
 }
+
+// A write is never followed through a redirect. Go would follow a 302 with a
+// GET, whose 200 (a login page) could read as the write's acknowledgment, and
+// a 307 by sending the write again. The caller gets the redirect itself.
+func TestWriteRedirectIsReturnedNotFollowed(t *testing.T) {
+	for _, status := range []int{http.StatusFound, http.StatusSeeOther, http.StatusTemporaryRedirect, http.StatusPermanentRedirect} {
+		for _, sameOrigin := range []bool{false, true} {
+			var writes, landed atomic.Int32
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/login" {
+					landed.Add(1)
+					w.WriteHeader(http.StatusOK)
+					return
+				}
+				writes.Add(1)
+				http.Redirect(w, r, "/login", status)
+			}))
+			c := New(Options{SameOriginRedirects: sameOrigin})
+			req, _ := http.NewRequest(http.MethodPost, srv.URL+"/write", nil)
+			resp, err := c.Do(context.Background(), req)
+			if err != nil {
+				t.Fatalf("%d: %v", status, err)
+			}
+			resp.Body.Close()
+			if resp.StatusCode != status || writes.Load() != 1 || landed.Load() != 0 {
+				t.Fatalf("%d (same origin %v): got status %d, %d writes, %d landings; want the redirect itself",
+					status, sameOrigin, resp.StatusCode, writes.Load(), landed.Load())
+			}
+			srv.Close()
+		}
+	}
+}
+
+// Reads still follow redirects: GET, HEAD and the read verbs a CLI declares
+// in RetryMethods (CalDAV's PROPFIND).
+func TestReadRedirectIsFollowed(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/moved" {
+			http.Redirect(w, r, "/here", http.StatusTemporaryRedirect)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	c := New(Options{SameOriginRedirects: true, RetryMethods: []string{"PROPFIND"}})
+	for _, method := range []string{http.MethodGet, http.MethodHead, "PROPFIND"} {
+		req, _ := http.NewRequest(method, srv.URL+"/moved", nil)
+		resp, err := c.Do(context.Background(), req)
+		if err != nil {
+			t.Fatalf("%s: %v", method, err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK || resp.Request.URL.Path != "/here" {
+			t.Fatalf("%s: got %d at %s; want the redirect followed", method, resp.StatusCode, resp.Request.URL.Path)
+		}
+	}
+}

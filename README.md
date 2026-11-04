@@ -179,6 +179,13 @@ only some CLIs had is therefore opt-in:
 | `config.Schema.CheckPlan` | none | openobserve-cli refuses to repoint a browser-session context. |
 | `config.Words.SchemeHint` | "Use one of: …" | wecom-calendar-cli explains its only scheme. |
 
+One transport rule is not opt-in: the default Doer follows a redirect only
+for a read (GET, HEAD and `RetryMethods`). A write gets the redirect itself
+back. Following it would answer a different request, usually a GET to a
+login page, or send the write a second time, and a 2xx at the end would
+report a write that never happened. Under the write rule in `errors` a
+write's 3xx is an unknown outcome that keeps its status.
+
 The JSON a CLI prints (the error envelope, the list envelope, `_notice`, the
 update status, the credential recovery errors, and the configuration errors,
 `set-context` plan and auth guide) is pinned by tests. Changing it is a breaking change for

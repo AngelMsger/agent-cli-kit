@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `transport`: the default Doer no longer follows a redirect of a write. A
+  GET, a HEAD or a method in `RetryMethods` still follows redirects as
+  before (same origin only with `SameOriginRedirects`); any other method gets
+  the 3xx response itself. Go followed a 301, 302 or 303 after a write with a
+  GET, so a login page's 200 could read as the write's acknowledgment, and it
+  followed a 307 or 308 by sending the write again to the new location. A CLI
+  that checks for a 2xx now sees the redirect's status, and `FromWrite`
+  reports it as an unknown outcome. A CLI whose server acknowledges a write
+  with a redirect (Jenkins answers stop and cancel with a 302 to the previous
+  page) must accept that redirect itself.
+- `errors.FromWrite`: an unknown outcome caused by a 3xx response has its own
+  hint. It still says not to repeat the write, and names what a redirect
+  usually means (a login page, a single sign-on proxy, a base URL that should
+  use https) before the read command.
+
 ## [0.6.0] - 2026-11-02
 
 ### Added

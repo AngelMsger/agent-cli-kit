@@ -34,6 +34,8 @@ type Options struct {
 	// scheme, host and port; see sameOriginRedirect. It applies only to the
 	// default Doer.
 	SameOriginRedirects bool
+	// The default Doer never follows a redirect of a write: see
+	// followsRedirects.
 	// RetryMethods adds request methods that are safe to retry (for example the
 	// read-only CalDAV verbs PROPFIND and REPORT). GET and HEAD always are.
 	RetryMethods []string
@@ -69,9 +71,7 @@ func New(opt Options) *Client {
 			timeout = DefaultTimeout
 		}
 		hc := &http.Client{Timeout: timeout}
-		if opt.SameOriginRedirects {
-			hc.CheckRedirect = sameOriginRedirect
-		}
+		hc.CheckRedirect = c.redirectPolicy(opt.SameOriginRedirects)
 		c.doer = hc
 	}
 	if opt.Verbose != nil {
@@ -84,6 +84,36 @@ func New(opt Options) *Client {
 }
 
 var errRedirectPolicy = errors.New("redirect rejected")
+
+// redirectPolicy is the default Doer's CheckRedirect. Only a read is
+// followed: a GET, a HEAD or a method in RetryMethods, the methods this client
+// already treats as safe to send twice. A write is never followed. Go follows
+// a 301, 302 or 303 with a GET, so the response would answer that GET (often
+// a login page), not the write; and it follows a 307 or 308 by sending the
+// write again to wherever the redirect points. Either way a 2xx at the end
+// could read as an acknowledged write that never happened. Returning the
+// redirect itself lets the caller see a non-2xx answer: under the errors
+// package's write rule its outcome is unknown, with the redirect's status.
+func (c *Client) redirectPolicy(sameOrigin bool) func(*http.Request, []*http.Request) error {
+	return func(req *http.Request, via []*http.Request) error {
+		if len(via) > 0 && !c.followsRedirects(via[0].Method) {
+			return http.ErrUseLastResponse
+		}
+		if sameOrigin {
+			return sameOriginRedirect(req, via)
+		}
+		if len(via) >= 10 {
+			return fmt.Errorf("%w: stopped after 10 redirects", errRedirectPolicy)
+		}
+		return nil
+	}
+}
+
+// followsRedirects reports whether a request with method is a read, which a
+// redirect may be followed for.
+func (c *Client) followsRedirects(method string) bool {
+	return c.retryable[strings.ToUpper(method)]
+}
 
 // sameOriginRedirect refuses any redirect that leaves the first hop's origin.
 // The default http.Client would follow redirects and, because Go's own
