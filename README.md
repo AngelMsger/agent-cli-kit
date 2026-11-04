@@ -185,11 +185,16 @@ One transport rule is not opt-in: the default Doer follows a redirect only
 for a read (GET, HEAD, `RetryMethods`, or a request whose context
 `transport.AsRead` marked), and only when the next hop sends the same
 request. A write gets the redirect itself back, even from a custom
-`Options.Doer` that followed it. Following it would answer a
-different request, usually a GET to a login page, or send the write a second
-time, and a 2xx at the end would report a write that never happened. Under
-the write rule in `errors` a write's 3xx is an unknown outcome that keeps its
-status.
+`Options.Doer` that followed it, or that stopped following with an error and
+returned its last redirect (the error comes back too). A custom Doer keeps
+`*http.Client`'s contract: a response it returns with an error has its body
+closed already, and neither the kit nor its caller closes it again. Following it would
+answer a different request, usually a GET to a login page, or send the
+write a second time, and a 2xx at the end would report a write that never
+happened. Under the write rule in `errors` a write's 3xx is an unknown
+outcome that keeps its status, when the CLI builds its error from that
+response. A Doer's error returned with the redirect carries no status, so it
+is an unknown outcome without one.
 
 A CLI marks a read that cannot be a GET with `transport.AsRead(ctx)`: a
 search or a query posted because its parameters do not fit in a URL

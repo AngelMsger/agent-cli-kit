@@ -41,7 +41,8 @@ func (c *Client) doWithRetry(ctx context.Context, req *http.Request) (*http.Resp
 		}
 
 		delay := c.backoff(attempt, resp)
-		if resp != nil {
+		if resp != nil && err == nil {
+			// A response that came with an error is closed already (see Doer).
 			drainAndClose(resp.Body)
 		}
 		select {

@@ -173,19 +173,30 @@ func sameOriginRedirect(req *http.Request, via []*http.Request) error {
 	return nil
 }
 
-// Do sends req, applying decorators and retrying transient failures. The
-// returned response (if any) has a readable, non-nil Body that the caller must
-// close. The context bounds the whole retry sequence.
+// Do sends req, applying decorators and retrying transient failures. With a
+// nil error, the returned response has a readable, non-nil Body that the
+// caller must close. A response returned together with an error (a redirect
+// the Doer refused to follow) has its body closed already, as with
+// *http.Client; the caller must not close it again. Any returned response has
+// a non-nil Request: the request it answers, even when a custom Doer left it
+// unset. The context bounds the whole retry sequence.
 //
 // A write is answered by its first response. The default Doer never follows
 // a write's redirect; when a custom Doer (an *http.Client with Go's default
 // policy, say) followed one anyway, Do returns the redirect the chain began
-// with, with an empty body, instead of the page it led to. The write rule in
+// with, with an empty body, instead of the page it led to. When the Doer
+// stopped following with an error and returned its last redirect (its
+// CheckRedirect refused a hop, or Go's 10-hop limit), Do returns the first
+// redirect with that error. The write rule in
 // errors then reports an unknown outcome, as it does with the default Doer:
 // the page at the end answered a different request, and on a 307 or 308 the
 // Doer has already sent the write a second time.
 func (c *Client) Do(ctx context.Context, req *http.Request) (*http.Response, error) {
 	req = req.WithContext(ctx)
+	// A request reissued from an earlier redirect chain still names the
+	// redirect that created it. That history is not this call's, so the copy
+	// sent here starts without it, and firstAnswer sees only this call's hops.
+	req.Response = nil
 	for _, d := range c.decorators {
 		d(req)
 	}
@@ -193,24 +204,39 @@ func (c *Client) Do(ctx context.Context, req *http.Request) (*http.Response, err
 		req.Header.Set("User-Agent", c.userAgent)
 	}
 	resp, err := c.doWithRetry(ctx, req)
-	if err == nil && !c.isRead(req) {
-		resp = firstAnswer(resp)
+	if resp != nil && !c.isRead(req) {
+		resp = firstAnswer(resp, err)
+	}
+	if resp != nil && resp.Request == nil {
+		// A custom Doer may build a response without the request it answers;
+		// callers read the request's method and URL from it. A first redirect
+		// answered req itself, so this also holds for one firstAnswer chose.
+		resp.Request = req
 	}
 	return resp, err
 }
 
-// firstAnswer returns the redirect a followed chain of responses began with,
-// or resp itself when it answered the request directly. net/http links each
-// followed hop's request to the redirect that caused it.
-func firstAnswer(resp *http.Response) *http.Response {
-	if resp == nil || resp.Request == nil || resp.Request.Response == nil {
+// firstAnswer returns the redirect a write's chain of responses began with, or
+// resp itself when it answered the write directly. net/http links each
+// followed hop's request to the redirect that caused it. The page at the end
+// is closed unread, since it can be large or never end. A Doer that stopped
+// following with an error (its CheckRedirect refused a hop, or it hit its hop
+// limit) returns its last redirect with that error; the first redirect
+// replaces it and the error stays.
+func firstAnswer(resp *http.Response, err error) *http.Response {
+	redirect := resp.StatusCode >= 300 && resp.StatusCode < 400
+	followed := resp.Request != nil && resp.Request.Response != nil
+	if (err != nil && !redirect) || (err == nil && !followed) {
 		return resp
 	}
-	first := resp.Request.Response
+	first := resp
 	for first.Request != nil && first.Request.Response != nil {
 		first = first.Request.Response
 	}
-	drainAndClose(resp.Body)
+	if err == nil && resp.Body != nil {
+		// With an error the Doer has closed it already (see Doer).
+		_ = resp.Body.Close()
+	}
 	first.Body = http.NoBody
 	return first
 }

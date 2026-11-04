@@ -3,6 +3,7 @@ package transport
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -275,5 +276,236 @@ func TestCustomDoerWriteIsAnsweredByItsRedirect(t *testing.T) {
 			t.Fatalf("%d read: got %d at %s; want the redirect followed", status, resp.StatusCode, resp.Request.URL.Path)
 		}
 		srv.Close()
+	}
+}
+
+// A custom Doer that gives up following a write's redirects (its own
+// CheckRedirect, or net/http's 10-hop limit) returns its last redirect, with
+// the body closed, and an error. The write is still answered by its first
+// redirect, and the error stays.
+func TestCustomDoerWriteRedirectErrorIsAnsweredByItsRedirect(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, fmt.Sprintf("/hop%d", len(r.URL.Path)), http.StatusFound)
+	}))
+	defer srv.Close()
+	stopAtSecond := &http.Client{CheckRedirect: func(_ *http.Request, via []*http.Request) error {
+		if len(via) >= 2 {
+			return errors.New("policy: no more hops")
+		}
+		return nil
+	}}
+	refuseFirst := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error {
+		return errors.New("policy: no redirects")
+	}}
+	for name, doer := range map[string]*http.Client{"hop limit": {}, "policy at the second hop": stopAtSecond, "policy at the first hop": refuseFirst} {
+		c := New(Options{Doer: doer})
+		req, _ := http.NewRequest(http.MethodPost, srv.URL+"/write", strings.NewReader("x"))
+		resp, err := c.Do(context.Background(), req)
+		if err == nil || resp == nil {
+			t.Fatalf("%s: got %v, %v; want the first redirect with the Doer's error", name, resp, err)
+		}
+		body, readErr := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusFound || resp.Request.URL.Path != "/write" || len(body) != 0 || readErr != nil {
+			t.Fatalf("%s: got %d for %s with %q (%v); want the first redirect", name, resp.StatusCode, resp.Request.URL.Path, body, readErr)
+		}
+	}
+}
+
+type doerFunc func(*http.Request) (*http.Response, error)
+
+func (f doerFunc) Do(req *http.Request) (*http.Response, error) { return f(req) }
+
+type trackedBody struct {
+	io.Reader
+	closes int
+}
+
+func (b *trackedBody) Close() error { b.closes++; return nil }
+
+// A custom Doer may answer a write with any response and an error. The error
+// stays, and a 3xx is still the write's answer with an empty body. As with
+// *http.Client, a body returned with an error is the Doer's to have closed,
+// so Do never closes it again: a second Close is not safe for every body.
+func TestCustomDoerWriteKeepsItsError(t *testing.T) {
+	failure := errors.New("unexpected EOF")
+	for _, status := range []int{http.StatusFound, http.StatusOK, http.StatusBadGateway} {
+		body := &trackedBody{Reader: strings.NewReader("page")}
+		c := New(Options{Doer: doerFunc(func(req *http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: status, Header: http.Header{"Location": {"/login"}}, Body: body, Request: req}, failure
+		})})
+		req, _ := http.NewRequest(http.MethodPost, "https://example.test/write", strings.NewReader("x"))
+		resp, err := c.Do(context.Background(), req)
+		if !errors.Is(err, failure) || resp == nil || resp.StatusCode != status {
+			t.Fatalf("%d: got %v, %v; want the response with its error", status, resp, err)
+		}
+		redirect := status >= 300 && status < 400
+		if body.closes != 0 || (resp.Body == http.NoBody) != redirect {
+			t.Fatalf("%d: body closed %d times, replaced=%v; want it never closed, replaced only for a redirect", status, body.closes, resp.Body == http.NoBody)
+		}
+	}
+}
+
+// The page a followed write redirect led to is closed exactly once, by Do.
+func TestCustomDoerWriteClosesTheDiscardedPageOnce(t *testing.T) {
+	page := &trackedBody{Reader: strings.NewReader("sign in")}
+	c := New(Options{Doer: doerFunc(func(req *http.Request) (*http.Response, error) {
+		first := &http.Response{StatusCode: http.StatusFound, Header: http.Header{"Location": {"/login"}}, Body: http.NoBody, Request: req}
+		hop, _ := http.NewRequest(http.MethodGet, "https://example.test/login", nil)
+		hop.Response = first
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: page, Request: hop}, nil
+	})})
+	req, _ := http.NewRequest(http.MethodPost, "https://example.test/write", strings.NewReader("x"))
+	resp, err := c.Do(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusFound || page.closes != 1 {
+		t.Fatalf("got %d with the page closed %d times; want the first redirect and one close", resp.StatusCode, page.closes)
+	}
+}
+
+// A custom Doer may build a response without the request it answers. Do fills
+// it in, so a caller can read the request's method and URL from any response.
+func TestResponseAlwaysNamesItsRequest(t *testing.T) {
+	for _, method := range []string{http.MethodGet, http.MethodPost} {
+		c := New(Options{Doer: doerFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: http.StatusFound, Header: http.Header{"Location": {"/login"}}, Body: io.NopCloser(strings.NewReader(""))}, nil
+		})})
+		req, _ := http.NewRequest(method, "https://example.test/job/app/7/stop", strings.NewReader("x"))
+		resp, err := c.Do(context.Background(), req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.Request == nil || resp.Request.Method != method || resp.Request.URL.Path != "/job/app/7/stop" {
+			t.Fatalf("%s: response names %+v; want the request it answers", method, resp.Request)
+		}
+	}
+}
+
+// The page a custom Doer's redirect led to is closed unread: a page that never
+// ends must not hold up the write's answer.
+func TestCustomDoerWriteDoesNotReadTheRedirectTarget(t *testing.T) {
+	stop := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/stream" {
+			http.Redirect(w, r, "/stream", http.StatusFound)
+			return
+		}
+		chunk := []byte(strings.Repeat("x", 4096))
+		for {
+			select {
+			case <-stop:
+				return
+			case <-r.Context().Done():
+				return
+			default:
+			}
+			if _, err := w.Write(chunk); err != nil {
+				return
+			}
+			w.(http.Flusher).Flush()
+		}
+	}))
+	defer srv.Close()
+	defer close(stop) // ends the page first, so a failing Do returns and Close does not wait
+	c := New(Options{Doer: &http.Client{}})
+	done := make(chan *http.Response, 1)
+	go func() {
+		req, _ := http.NewRequest(http.MethodPost, srv.URL+"/write", strings.NewReader("x"))
+		resp, err := c.Do(context.Background(), req)
+		if err != nil {
+			t.Error(err)
+		}
+		done <- resp
+	}()
+	select {
+	case resp := <-done:
+		if resp != nil {
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusFound {
+				t.Fatalf("got %d, want the first redirect", resp.StatusCode)
+			}
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Do read the endless page the write's redirect led to")
+	}
+}
+
+// A marked POST whose body cannot be replayed is a read that Go cannot send
+// again: it is not retried, and a 307 or 308 comes back instead of being
+// followed without its body.
+func TestNonReplayableMarkedPostIsSentOnce(t *testing.T) {
+	for _, status := range []int{http.StatusServiceUnavailable, http.StatusTemporaryRedirect, http.StatusPermanentRedirect} {
+		var hits []string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			hits = append(hits, r.Method+" "+r.URL.Path)
+			if r.URL.Path == "/query" {
+				if status >= 500 {
+					w.WriteHeader(status)
+					return
+				}
+				http.Redirect(w, r, "/elsewhere", status)
+			}
+		}))
+		c := New(Options{MaxRetries: 2, RetryBaseDelay: time.Millisecond})
+		req, _ := http.NewRequest(http.MethodPost, srv.URL+"/query", io.NopCloser(strings.NewReader("query=up")))
+		resp, err := c.Do(AsRead(context.Background()), req)
+		if err != nil {
+			t.Fatalf("%d: %v", status, err)
+		}
+		resp.Body.Close()
+		srv.Close()
+		if resp.StatusCode != status || len(hits) != 1 || hits[0] != "POST /query" {
+			t.Fatalf("%d: got %d after %v; want one POST answered with %d", status, resp.StatusCode, hits, status)
+		}
+	}
+}
+
+// A request reissued from an earlier redirect chain still names the redirect
+// that created it. That history is not this call's: the write is answered by
+// this call's own response, with the default Doer and with a custom one.
+func TestStaleRedirectHistoryIsNotThisCallsAnswer(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer srv.Close()
+	created := doerFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusCreated, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(""))}, nil
+	})
+	for name, doer := range map[string]Doer{"default": nil, "custom without Request": created} {
+		earlier, _ := http.NewRequest(http.MethodPost, srv.URL+"/old", nil)
+		req, _ := http.NewRequest(http.MethodPost, srv.URL+"/write", strings.NewReader("x"))
+		req.Response = &http.Response{StatusCode: http.StatusFound, Header: http.Header{}, Body: http.NoBody, Request: earlier}
+		resp, err := New(Options{Doer: doer}).Do(context.Background(), req)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusCreated || resp.Request == nil || resp.Request.URL.Path != "/write" || resp.Request.Response != nil {
+			t.Fatalf("%s: got %d for %+v; want this call's 201", name, resp.StatusCode, resp.Request)
+		}
+	}
+}
+
+// A custom Doer may supply a chain whose first redirect does not name its
+// request. The first redirect answered the write itself, so Do names it.
+func TestRecoveredFirstRedirectNamesItsRequest(t *testing.T) {
+	doer := doerFunc(func(req *http.Request) (*http.Response, error) {
+		first := &http.Response{StatusCode: http.StatusFound, Header: http.Header{"Location": {"/login"}}, Body: http.NoBody}
+		hop, _ := http.NewRequest(http.MethodGet, "https://example.test/login", nil)
+		hop.Response = first
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader("sign in")), Request: hop}, nil
+	})
+	req, _ := http.NewRequest(http.MethodPost, "https://example.test/job/app/7/stop", strings.NewReader("x"))
+	resp, err := New(Options{Doer: doer}).Do(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusFound || resp.Request == nil || resp.Request.Method != http.MethodPost || resp.Request.URL.Path != "/job/app/7/stop" {
+		t.Fatalf("got %d for %+v; want the first redirect naming the write", resp.StatusCode, resp.Request)
 	}
 }

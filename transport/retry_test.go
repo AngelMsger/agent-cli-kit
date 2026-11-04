@@ -166,3 +166,26 @@ func TestAsReadPostIsRetried(t *testing.T) {
 		}
 	}
 }
+
+// A read retried after its Doer returned a response with an error does not
+// close that response's body again: like *http.Client, the Doer closed it.
+func TestRetryDoesNotCloseABodyReturnedWithAnError(t *testing.T) {
+	body := &trackedBody{Reader: strings.NewReader("")}
+	calls := 0
+	c := New(Options{MaxRetries: 1, RetryBaseDelay: time.Millisecond, Doer: doerFunc(func(req *http.Request) (*http.Response, error) {
+		calls++
+		if calls == 1 {
+			return &http.Response{StatusCode: http.StatusFound, Header: http.Header{}, Body: body, Request: req}, io.ErrUnexpectedEOF
+		}
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader("ok")), Request: req}, nil
+	})})
+	req, _ := http.NewRequest(http.MethodGet, "https://example.test/page", nil)
+	resp, err := c.Do(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if calls != 2 || body.closes != 0 {
+		t.Fatalf("calls=%d, first body closed %d times; want a retry and no close", calls, body.closes)
+	}
+}
