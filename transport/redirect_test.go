@@ -233,3 +233,47 @@ func TestBodyReadIsNotTurnedIntoAGet(t *testing.T) {
 		}
 	}
 }
+
+// A custom Doer keeps its own redirect policy, so Go's default client follows
+// a write's 302 with a GET and its 307 by sending the write again. The write
+// is still answered by its first response: Do returns the redirect, so the
+// caller cannot read the login page at the end as an acknowledgment. Before,
+// only the default Doer was covered, and a library caller that passed its own
+// *http.Client got the login page's 200.
+func TestCustomDoerWriteIsAnsweredByItsRedirect(t *testing.T) {
+	for _, status := range []int{http.StatusFound, http.StatusTemporaryRedirect} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/login":
+				_, _ = w.Write([]byte("<html>sign in</html>"))
+			case "/hop":
+				http.Redirect(w, r, "/login", status)
+			default:
+				http.Redirect(w, r, "/hop", status)
+			}
+		}))
+		c := New(Options{Doer: &http.Client{}})
+		req, _ := http.NewRequest(http.MethodPost, srv.URL+"/write", strings.NewReader("x"))
+		resp, err := c.Do(context.Background(), req)
+		if err != nil {
+			t.Fatalf("%d: %v", status, err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != status || resp.Request.URL.Path != "/write" || len(body) != 0 {
+			t.Fatalf("%d: got %d for %s with %q; want the first redirect", status, resp.StatusCode, resp.Request.URL.Path, body)
+		}
+
+		// A read through the same Doer still ends where its redirects lead.
+		req, _ = http.NewRequest(http.MethodGet, srv.URL+"/page", nil)
+		resp, err = c.Do(context.Background(), req)
+		if err != nil {
+			t.Fatalf("%d read: %v", status, err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK || resp.Request.URL.Path != "/login" {
+			t.Fatalf("%d read: got %d at %s; want the redirect followed", status, resp.StatusCode, resp.Request.URL.Path)
+		}
+		srv.Close()
+	}
+}

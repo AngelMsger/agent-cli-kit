@@ -15,7 +15,9 @@ const DefaultTimeout = 30 * time.Second
 
 // Options configures a Client.
 type Options struct {
-	// Doer executes requests. Defaults to an *http.Client with Timeout.
+	// Doer executes requests. Defaults to an *http.Client with Timeout. A
+	// custom Doer keeps its own redirect policy for reads, but a write is
+	// still answered by its first response: see Client.Do.
 	Doer Doer
 	// Timeout is the per-request timeout when Doer is nil.
 	Timeout time.Duration
@@ -174,6 +176,14 @@ func sameOriginRedirect(req *http.Request, via []*http.Request) error {
 // Do sends req, applying decorators and retrying transient failures. The
 // returned response (if any) has a readable, non-nil Body that the caller must
 // close. The context bounds the whole retry sequence.
+//
+// A write is answered by its first response. The default Doer never follows
+// a write's redirect; when a custom Doer (an *http.Client with Go's default
+// policy, say) followed one anyway, Do returns the redirect the chain began
+// with, with an empty body, instead of the page it led to. The write rule in
+// errors then reports an unknown outcome, as it does with the default Doer:
+// the page at the end answered a different request, and on a 307 or 308 the
+// Doer has already sent the write a second time.
 func (c *Client) Do(ctx context.Context, req *http.Request) (*http.Response, error) {
 	req = req.WithContext(ctx)
 	for _, d := range c.decorators {
@@ -182,5 +192,25 @@ func (c *Client) Do(ctx context.Context, req *http.Request) (*http.Response, err
 	if c.userAgent != "" && req.Header.Get("User-Agent") == "" {
 		req.Header.Set("User-Agent", c.userAgent)
 	}
-	return c.doWithRetry(ctx, req)
+	resp, err := c.doWithRetry(ctx, req)
+	if err == nil && !c.isRead(req) {
+		resp = firstAnswer(resp)
+	}
+	return resp, err
+}
+
+// firstAnswer returns the redirect a followed chain of responses began with,
+// or resp itself when it answered the request directly. net/http links each
+// followed hop's request to the redirect that caused it.
+func firstAnswer(resp *http.Response) *http.Response {
+	if resp == nil || resp.Request == nil || resp.Request.Response == nil {
+		return resp
+	}
+	first := resp.Request.Response
+	for first.Request != nil && first.Request.Response != nil {
+		first = first.Request.Response
+	}
+	drainAndClose(resp.Body)
+	first.Body = http.NoBody
+	return first
 }

@@ -24,6 +24,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   method and body, and gets a 301, 302 or 303 back, because Go would follow
   those with a GET without the body. A PROPFIND used to be followed that way,
   so its answer came from a different request. GET and HEAD are unchanged.
+- `transport`: a write is answered by its first response with any Doer. When
+  a custom `Options.Doer` (an `*http.Client` with Go's default policy, say)
+  followed a write's redirect, `Do` returns that redirect, with an empty
+  body, instead of the page it led to. v0.7.0 covered only the default Doer,
+  so a library caller that passed its own client could still read a login
+  page's 200 as the write's acknowledgment once a CLI dropped its local
+  check.
 
 ## [0.7.0] - 2026-11-04
 
