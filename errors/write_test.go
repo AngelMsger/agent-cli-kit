@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	stderrors "errors"
+	"fmt"
 	"net/url"
 	"testing"
 )
@@ -95,6 +96,26 @@ func TestFromWriteKeepsDefiniteRefusals(t *testing.T) {
 	}
 	if FromWrite(nil, testTarget) != nil {
 		t.Fatal("FromWrite(nil) is not nil")
+	}
+}
+
+// An error that already reports a write outcome passes through FromWrite
+// unchanged, so a decorator that classifies what its inner client already
+// classified does not nest one outcome message inside another.
+func TestFromWriteKeepsAWriteOutcome(t *testing.T) {
+	cause := New(CategoryServer, "HTTP_503", "temporarily unavailable").WithHTTPStatus(503)
+	readFailed := New(CategoryServer, "HTTP_502", "bad gateway").WithHTTPStatus(502)
+	for name, err := range map[string]error{
+		"unknown":          FromWrite(cause, testTarget),
+		"succeeded":        WriteSucceeded(readFailed, CodeWriteSucceededReadFailed, "reading it back failed", testTarget),
+		"missing identity": MissingWriteIdentity(testTarget),
+		"wrapped":          fmt.Errorf("stop build: %w", FromWrite(cause, testTarget)),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := FromWrite(err, WriteTarget{Description: "something else"}); got != err {
+				t.Fatalf("FromWrite rewrapped a write outcome: %+v", AsCLIError(got))
+			}
+		})
 	}
 }
 

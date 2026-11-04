@@ -121,7 +121,9 @@ repeat the write", and the read commands as next steps. A 2xx response that
 could not be decoded, `errors.MissingWriteIdentity` (no ID or queue location
 in the response) and `errors.WriteSucceeded` (a later read failed) report a write that
 was applied but whose result cannot be shown, under `WRITE_SUCCEEDED_*` codes
-that keep the identity of what was changed.
+that keep the identity of what was changed. An error that already reports a
+write outcome passes through `FromWrite` unchanged, so a client decorator can
+classify every write without nesting one outcome inside another.
 
 ## Read-only mode and prompts
 

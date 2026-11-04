@@ -31,6 +31,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   hint. It still says not to repeat the write, and names what a redirect
   usually means (a login page, a single sign-on proxy, a base URL that should
   use https) before the read command.
+- `errors.FromWrite`: an error that already reports a write outcome (from
+  `FromWrite`, `WriteSucceeded` or `MissingWriteIdentity`) is returned
+  unchanged. A layer that classifies a write its inner client already
+  classified, such as a decorator around a client, used to nest one outcome
+  inside another ("Write outcome is unknown for …: Write outcome is unknown
+  for …").
 
 ## [0.6.0] - 2026-11-02
 

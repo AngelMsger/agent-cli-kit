@@ -60,6 +60,11 @@ type WriteTarget struct {
 // write's redirect instead of following it, and its hint says what a
 // redirect usually means.
 //
+// An error that already reports a write outcome (from FromWrite,
+// WriteSucceeded or MissingWriteIdentity) is returned unchanged, so a layer
+// that classifies a write its inner client already classified, such as a
+// decorator around a client, does not wrap it twice.
+//
 // The category is read from the outermost CLIError in err's chain, as
 // AsCLIError finds it. A CLI that wraps a transport failure in a refusal
 // category, or joins a refusal before it, hides that failure from FromWrite;
@@ -69,6 +74,9 @@ func FromWrite(err error, target WriteTarget) error {
 		return nil
 	}
 	ce := AsCLIError(err)
+	if ce.writeOutcome {
+		return err
+	}
 	switch ce.Category {
 	case CategoryUsage, CategoryConfig, CategoryAuth, CategoryPermission, CategoryNotFound, CategoryConflict:
 		return err
@@ -112,6 +120,7 @@ func writeOutcome(err error, code, message string, target WriteTarget) *CLIError
 		WithHint(writeHint).
 		WithNextSteps(target.ReadSteps...)
 	out.Retryable = false
+	out.writeOutcome = true
 	return out
 }
 

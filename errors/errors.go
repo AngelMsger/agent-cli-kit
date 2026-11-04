@@ -46,6 +46,9 @@ type CLIError struct {
 	HTTPStatus int
 	Recovery   *Recovery
 	cause      error
+	// writeOutcome marks an error the write-outcome builders made, so
+	// FromWrite does not wrap it twice.
+	writeOutcome bool
 }
 
 // Recovery describes an environment change a caller can make before retrying.
