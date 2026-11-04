@@ -180,7 +180,8 @@ func sameOriginRedirect(req *http.Request, via []*http.Request) error {
 // A write is answered by its first response. The default Doer never follows
 // a write's redirect; when a custom Doer (an *http.Client with Go's default
 // policy, say) followed one anyway, Do returns the redirect the chain began
-// with, with an empty body, instead of the page it led to. The write rule in
+// with, with an empty body, instead of the page it led to, and without an
+// error when the Doer gave up following partway. The write rule in
 // errors then reports an unknown outcome, as it does with the default Doer:
 // the page at the end answered a different request, and on a 307 or 308 the
 // Doer has already sent the write a second time.
@@ -193,24 +194,32 @@ func (c *Client) Do(ctx context.Context, req *http.Request) (*http.Response, err
 		req.Header.Set("User-Agent", c.userAgent)
 	}
 	resp, err := c.doWithRetry(ctx, req)
-	if err == nil && !c.isRead(req) {
-		resp = firstAnswer(resp)
+	if resp != nil && !c.isRead(req) {
+		return firstAnswer(resp, err)
 	}
 	return resp, err
 }
 
-// firstAnswer returns the redirect a followed chain of responses began with,
-// or resp itself when it answered the request directly. net/http links each
-// followed hop's request to the redirect that caused it.
-func firstAnswer(resp *http.Response) *http.Response {
-	if resp == nil || resp.Request == nil || resp.Request.Response == nil {
-		return resp
+// firstAnswer returns the redirect a write's chain of responses began with, or
+// resp itself when it answered the write directly. net/http links each
+// followed hop's request to the redirect that caused it. The page at the end
+// is closed unread, since it can be large or never end. A Doer that stopped
+// following (its CheckRedirect failed, or it hit its hop limit) returns its
+// last redirect, with the body closed, and an error; the write's answer is
+// still the first redirect, so that error is dropped.
+func firstAnswer(resp *http.Response, err error) (*http.Response, error) {
+	redirect := resp.StatusCode >= 300 && resp.StatusCode < 400
+	followed := resp.Request != nil && resp.Request.Response != nil
+	if (err != nil && !redirect) || (err == nil && !followed) {
+		return resp, err
 	}
-	first := resp.Request.Response
+	first := resp
 	for first.Request != nil && first.Request.Response != nil {
 		first = first.Request.Response
 	}
-	drainAndClose(resp.Body)
+	if first != resp {
+		_ = resp.Body.Close()
+	}
 	first.Body = http.NoBody
-	return first
+	return first, nil
 }

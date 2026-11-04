@@ -185,7 +185,7 @@ One transport rule is not opt-in: the default Doer follows a redirect only
 for a read (GET, HEAD, `RetryMethods`, or a request whose context
 `transport.AsRead` marked), and only when the next hop sends the same
 request. A write gets the redirect itself back, even from a custom
-`Options.Doer` that followed it. Following it would answer a
+`Options.Doer` that followed it or gave up partway. Following it would answer a
 different request, usually a GET to a login page, or send the write a second
 time, and a 2xx at the end would report a write that never happened. Under
 the write rule in `errors` a write's 3xx is an unknown outcome that keeps its

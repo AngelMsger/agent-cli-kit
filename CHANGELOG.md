@@ -27,7 +27,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `transport`: a write is answered by its first response with any Doer. When
   a custom `Options.Doer` (an `*http.Client` with Go's default policy, say)
   followed a write's redirect, `Do` returns that redirect, with an empty
-  body, instead of the page it led to. v0.7.0 covered only the default Doer,
+  body, instead of the page it led to, which it closes unread. When the Doer
+  gave up following partway (its own `CheckRedirect` failed, or it reached
+  Go's 10-hop limit), `Do` also returns the first redirect, without the
+  Doer's error. v0.7.0 covered only the default Doer,
   so a library caller that passed its own client could still read a login
   page's 200 as the write's acknowledgment once a CLI dropped its local
   check.
