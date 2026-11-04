@@ -186,7 +186,9 @@ for a read (GET, HEAD, `RetryMethods`, or a request whose context
 `transport.AsRead` marked), and only when the next hop sends the same
 request. A write gets the redirect itself back, even from a custom
 `Options.Doer` that followed it, or that stopped following with an error and
-returned its last redirect (the error comes back too). Following it would
+returned its last redirect (the error comes back too). A custom Doer keeps
+`*http.Client`'s contract: a response it returns with an error has its body
+closed already, and neither the kit nor its caller closes it again. Following it would
 answer a different request, usually a GET to a login page, or send the
 write a second time, and a 2xx at the end would report a write that never
 happened. Under the write rule in `errors` a write's 3xx is an unknown

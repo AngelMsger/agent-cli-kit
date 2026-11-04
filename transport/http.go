@@ -173,10 +173,13 @@ func sameOriginRedirect(req *http.Request, via []*http.Request) error {
 	return nil
 }
 
-// Do sends req, applying decorators and retrying transient failures. The
-// returned response (if any) has a readable, non-nil Body that the caller must
-// close, and a non-nil Request: the request it answers, even when a custom
-// Doer left it unset. The context bounds the whole retry sequence.
+// Do sends req, applying decorators and retrying transient failures. With a
+// nil error, the returned response has a readable, non-nil Body that the
+// caller must close. A response returned together with an error (a redirect
+// the Doer refused to follow) has its body closed already, as with
+// *http.Client; the caller must not close it again. Any returned response has
+// a non-nil Request: the request it answers, even when a custom Doer left it
+// unset. The context bounds the whole retry sequence.
 //
 // A write is answered by its first response. The default Doer never follows
 // a write's redirect; when a custom Doer (an *http.Client with Go's default
