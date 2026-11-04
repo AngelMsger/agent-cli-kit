@@ -182,11 +182,21 @@ only some CLIs had is therefore opt-in:
 | `config.Words.SchemeHint` | "Use one of: …" | wecom-calendar-cli explains its only scheme. |
 
 One transport rule is not opt-in: the default Doer follows a redirect only
-for a read (GET, HEAD and `RetryMethods`). A write gets the redirect itself
-back. Following it would answer a different request, usually a GET to a
-login page, or send the write a second time, and a 2xx at the end would
-report a write that never happened. Under the write rule in `errors` a
-write's 3xx is an unknown outcome that keeps its status.
+for a read (GET, HEAD, `RetryMethods`, or a request whose context
+`transport.AsRead` marked), and only when the next hop sends the same
+request. A write gets the redirect itself back, even from a custom
+`Options.Doer` that followed it. Following it would answer a
+different request, usually a GET to a login page, or send the write a second
+time, and a 2xx at the end would report a write that never happened. Under
+the write rule in `errors` a write's 3xx is an unknown outcome that keeps its
+status.
+
+A CLI marks a read that cannot be a GET with `transport.AsRead(ctx)`: a
+search or a query posted because its parameters do not fit in a URL
+(prometheus-cli's queries, openobserve-cli's search, jira-cli's JQL search).
+The marked request is retried like a GET and follows a 307 or 308, which
+sends the same method and body again. A 301, 302 or 303 would turn it into a
+GET without its body, so a read with a body gets those redirects back too.
 
 The JSON a CLI prints (the error envelope, the list envelope, `_notice`, the
 update status, the credential recovery errors, and the configuration errors,

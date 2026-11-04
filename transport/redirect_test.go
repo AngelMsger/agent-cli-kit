@@ -3,8 +3,10 @@ package transport
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -160,5 +162,118 @@ func TestReadRedirectIsFollowed(t *testing.T) {
 		if resp.StatusCode != http.StatusOK || resp.Request.URL.Path != "/here" {
 			t.Fatalf("%s: got %d at %s; want the redirect followed", method, resp.StatusCode, resp.Request.URL.Path)
 		}
+	}
+}
+
+// A read other than a GET or HEAD follows a 307 or 308, which sends the same
+// method and body again. That covers a POST that AsRead marks (a posted query)
+// and a method in RetryMethods. v0.7.0 returned the redirect of any POST, so
+// a posted query behind an http-to-https 308 stopped working.
+func TestBodyReadFollowsSameMethodRedirect(t *testing.T) {
+	const body = "query=up"
+	for _, status := range []int{http.StatusTemporaryRedirect, http.StatusPermanentRedirect} {
+		for _, method := range []string{http.MethodPost, "PROPFIND"} {
+			var gotMethod, gotBody string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/moved" {
+					http.Redirect(w, r, "/here", status)
+					return
+				}
+				b, _ := io.ReadAll(r.Body)
+				gotMethod, gotBody = r.Method, string(b)
+				w.WriteHeader(http.StatusOK)
+			}))
+			c := New(Options{SameOriginRedirects: true, RetryMethods: []string{"PROPFIND"}})
+			ctx := context.Background()
+			if method == http.MethodPost {
+				ctx = AsRead(ctx) // PROPFIND is a read through RetryMethods
+			}
+			req, _ := http.NewRequest(method, srv.URL+"/moved", strings.NewReader(body))
+			resp, err := c.Do(ctx, req)
+			if err != nil {
+				t.Fatalf("%s %d: %v", method, status, err)
+			}
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusOK || gotMethod != method || gotBody != body {
+				t.Fatalf("%s %d: got %d, %s with %q at the target; want the same request followed",
+					method, status, resp.StatusCode, gotMethod, gotBody)
+			}
+			srv.Close()
+		}
+	}
+}
+
+// On a 301, 302 or 303 Go would follow a read with a body as a GET without
+// that body: a different request, whose answer is not the read's. The read
+// gets the redirect itself instead. A PROPFIND used to be followed this way.
+func TestBodyReadIsNotTurnedIntoAGet(t *testing.T) {
+	for _, status := range []int{http.StatusMovedPermanently, http.StatusFound, http.StatusSeeOther} {
+		for _, method := range []string{http.MethodPost, "PROPFIND"} {
+			var landed atomic.Int32
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/here" {
+					landed.Add(1)
+					w.WriteHeader(http.StatusOK)
+					return
+				}
+				http.Redirect(w, r, "/here", status)
+			}))
+			c := New(Options{RetryMethods: []string{"PROPFIND"}})
+			req, _ := http.NewRequest(method, srv.URL+"/moved", strings.NewReader("query=up"))
+			resp, err := c.Do(AsRead(context.Background()), req)
+			if err != nil {
+				t.Fatalf("%s %d: %v", method, status, err)
+			}
+			resp.Body.Close()
+			if resp.StatusCode != status || landed.Load() != 0 {
+				t.Fatalf("%s %d: got %d after %d GETs at the target; want the redirect itself",
+					method, status, resp.StatusCode, landed.Load())
+			}
+			srv.Close()
+		}
+	}
+}
+
+// A custom Doer keeps its own redirect policy, so Go's default client follows
+// a write's 302 with a GET and its 307 by sending the write again. The write
+// is still answered by its first response: Do returns the redirect, so the
+// caller cannot read the login page at the end as an acknowledgment. Before,
+// only the default Doer was covered, and a library caller that passed its own
+// *http.Client got the login page's 200.
+func TestCustomDoerWriteIsAnsweredByItsRedirect(t *testing.T) {
+	for _, status := range []int{http.StatusFound, http.StatusTemporaryRedirect} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/login":
+				_, _ = w.Write([]byte("<html>sign in</html>"))
+			case "/hop":
+				http.Redirect(w, r, "/login", status)
+			default:
+				http.Redirect(w, r, "/hop", status)
+			}
+		}))
+		c := New(Options{Doer: &http.Client{}})
+		req, _ := http.NewRequest(http.MethodPost, srv.URL+"/write", strings.NewReader("x"))
+		resp, err := c.Do(context.Background(), req)
+		if err != nil {
+			t.Fatalf("%d: %v", status, err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != status || resp.Request.URL.Path != "/write" || len(body) != 0 {
+			t.Fatalf("%d: got %d for %s with %q; want the first redirect", status, resp.StatusCode, resp.Request.URL.Path, body)
+		}
+
+		// A read through the same Doer still ends where its redirects lead.
+		req, _ = http.NewRequest(http.MethodGet, srv.URL+"/page", nil)
+		resp, err = c.Do(context.Background(), req)
+		if err != nil {
+			t.Fatalf("%d read: %v", status, err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK || resp.Request.URL.Path != "/login" {
+			t.Fatalf("%d read: got %d at %s; want the redirect followed", status, resp.StatusCode, resp.Request.URL.Path)
+		}
+		srv.Close()
 	}
 }
