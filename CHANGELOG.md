@@ -28,12 +28,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a custom `Options.Doer` (an `*http.Client` with Go's default policy, say)
   followed a write's redirect, `Do` returns that redirect, with an empty
   body, instead of the page it led to, which it closes unread. When the Doer
-  gave up following partway (its own `CheckRedirect` failed, or it reached
-  Go's 10-hop limit), `Do` also returns the first redirect, without the
-  Doer's error. v0.7.0 covered only the default Doer,
-  so a library caller that passed its own client could still read a login
-  page's 200 as the write's acknowledgment once a CLI dropped its local
-  check.
+  stopped following with an error and returned its last redirect (its own
+  `CheckRedirect` refused a hop, or it reached Go's 10-hop limit), `Do`
+  returns the first redirect with that error. v0.7.0 covered only the
+  default Doer, so a library caller that passed its own client could still
+  read a login page's 200 as the write's acknowledgment once a CLI dropped
+  its local check.
+- `transport`: a response from `Do` always names the request it answers.
+  When a custom Doer returns a response without `Request` (a synthetic one,
+  say), `Do` sets it, so a caller can read the request's method and URL from
+  any response.
 
 ## [0.7.0] - 2026-11-04
 

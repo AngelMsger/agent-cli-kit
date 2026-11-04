@@ -175,13 +175,16 @@ func sameOriginRedirect(req *http.Request, via []*http.Request) error {
 
 // Do sends req, applying decorators and retrying transient failures. The
 // returned response (if any) has a readable, non-nil Body that the caller must
-// close. The context bounds the whole retry sequence.
+// close, and a non-nil Request: the request it answers, even when a custom
+// Doer left it unset. The context bounds the whole retry sequence.
 //
 // A write is answered by its first response. The default Doer never follows
 // a write's redirect; when a custom Doer (an *http.Client with Go's default
 // policy, say) followed one anyway, Do returns the redirect the chain began
-// with, with an empty body, instead of the page it led to, and without an
-// error when the Doer gave up following partway. The write rule in
+// with, with an empty body, instead of the page it led to. When the Doer
+// stopped following with an error and returned its last redirect (its
+// CheckRedirect refused a hop, or Go's 10-hop limit), Do returns the first
+// redirect with that error. The write rule in
 // errors then reports an unknown outcome, as it does with the default Doer:
 // the page at the end answered a different request, and on a 307 or 308 the
 // Doer has already sent the write a second time.
@@ -194,8 +197,13 @@ func (c *Client) Do(ctx context.Context, req *http.Request) (*http.Response, err
 		req.Header.Set("User-Agent", c.userAgent)
 	}
 	resp, err := c.doWithRetry(ctx, req)
+	if resp != nil && resp.Request == nil {
+		// A custom Doer may build a response without the request it answers;
+		// callers read the request's method and URL from it.
+		resp.Request = req
+	}
 	if resp != nil && !c.isRead(req) {
-		return firstAnswer(resp, err)
+		resp = firstAnswer(resp, err)
 	}
 	return resp, err
 }
@@ -204,22 +212,22 @@ func (c *Client) Do(ctx context.Context, req *http.Request) (*http.Response, err
 // resp itself when it answered the write directly. net/http links each
 // followed hop's request to the redirect that caused it. The page at the end
 // is closed unread, since it can be large or never end. A Doer that stopped
-// following (its CheckRedirect failed, or it hit its hop limit) returns its
-// last redirect, with the body closed, and an error; the write's answer is
-// still the first redirect, so that error is dropped.
-func firstAnswer(resp *http.Response, err error) (*http.Response, error) {
+// following with an error (its CheckRedirect refused a hop, or it hit its hop
+// limit) returns its last redirect with that error; the first redirect
+// replaces it and the error stays.
+func firstAnswer(resp *http.Response, err error) *http.Response {
 	redirect := resp.StatusCode >= 300 && resp.StatusCode < 400
-	followed := resp.Request != nil && resp.Request.Response != nil
+	followed := resp.Request.Response != nil
 	if (err != nil && !redirect) || (err == nil && !followed) {
-		return resp, err
+		return resp
 	}
 	first := resp
 	for first.Request != nil && first.Request.Response != nil {
 		first = first.Request.Response
 	}
-	if first != resp {
+	if resp.Body != nil {
 		_ = resp.Body.Close()
 	}
 	first.Body = http.NoBody
-	return first, nil
+	return first
 }

@@ -282,7 +282,7 @@ func TestCustomDoerWriteIsAnsweredByItsRedirect(t *testing.T) {
 // A custom Doer that gives up following a write's redirects (its own
 // CheckRedirect, or net/http's 10-hop limit) returns its last redirect, with
 // the body closed, and an error. The write is still answered by its first
-// redirect.
+// redirect, and the error stays.
 func TestCustomDoerWriteRedirectErrorIsAnsweredByItsRedirect(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, fmt.Sprintf("/hop%d", len(r.URL.Path)), http.StatusFound)
@@ -301,13 +301,65 @@ func TestCustomDoerWriteRedirectErrorIsAnsweredByItsRedirect(t *testing.T) {
 		c := New(Options{Doer: doer})
 		req, _ := http.NewRequest(http.MethodPost, srv.URL+"/write", strings.NewReader("x"))
 		resp, err := c.Do(context.Background(), req)
-		if err != nil {
-			t.Fatalf("%s: %v", name, err)
+		if err == nil || resp == nil {
+			t.Fatalf("%s: got %v, %v; want the first redirect with the Doer's error", name, resp, err)
 		}
 		body, readErr := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		if resp.StatusCode != http.StatusFound || resp.Request.URL.Path != "/write" || len(body) != 0 || readErr != nil {
 			t.Fatalf("%s: got %d for %s with %q (%v); want the first redirect", name, resp.StatusCode, resp.Request.URL.Path, body, readErr)
+		}
+	}
+}
+
+type doerFunc func(*http.Request) (*http.Response, error)
+
+func (f doerFunc) Do(req *http.Request) (*http.Response, error) { return f(req) }
+
+type trackedBody struct {
+	io.Reader
+	closed bool
+}
+
+func (b *trackedBody) Close() error { b.closed = true; return nil }
+
+// A custom Doer may answer a write with any response and error. A 3xx keeps
+// its error and its body is closed, not lost; any other response comes back
+// with its error unchanged.
+func TestCustomDoerWriteKeepsItsErrorAndClosesTheBody(t *testing.T) {
+	failure := errors.New("unexpected EOF")
+	for _, status := range []int{http.StatusFound, http.StatusOK, http.StatusBadGateway} {
+		body := &trackedBody{Reader: strings.NewReader("page")}
+		c := New(Options{Doer: doerFunc(func(req *http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: status, Header: http.Header{"Location": {"/login"}}, Body: body, Request: req}, failure
+		})})
+		req, _ := http.NewRequest(http.MethodPost, "https://example.test/write", strings.NewReader("x"))
+		resp, err := c.Do(context.Background(), req)
+		if !errors.Is(err, failure) || resp == nil || resp.StatusCode != status {
+			t.Fatalf("%d: got %v, %v; want the response with its error", status, resp, err)
+		}
+		redirect := status >= 300 && status < 400
+		if body.closed != redirect || (resp.Body == http.NoBody) != redirect {
+			t.Fatalf("%d: body closed=%v, replaced=%v; want both only for a redirect", status, body.closed, resp.Body == http.NoBody)
+		}
+	}
+}
+
+// A custom Doer may build a response without the request it answers. Do fills
+// it in, so a caller can read the request's method and URL from any response.
+func TestResponseAlwaysNamesItsRequest(t *testing.T) {
+	for _, method := range []string{http.MethodGet, http.MethodPost} {
+		c := New(Options{Doer: doerFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: http.StatusFound, Header: http.Header{"Location": {"/login"}}, Body: io.NopCloser(strings.NewReader(""))}, nil
+		})})
+		req, _ := http.NewRequest(method, "https://example.test/job/app/7/stop", strings.NewReader("x"))
+		resp, err := c.Do(context.Background(), req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.Request == nil || resp.Request.Method != method || resp.Request.URL.Path != "/job/app/7/stop" {
+			t.Fatalf("%s: response names %+v; want the request it answers", method, resp.Request)
 		}
 	}
 }
