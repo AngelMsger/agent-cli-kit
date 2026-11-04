@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `transport.AsRead(ctx)` marks the requests sent with that context as
+  reads, whatever their method: they are retried on a transient failure and
+  followed through a redirect as a GET is. It is for a read that cannot be a
+  GET, such as a posted search or query. v0.7.0 stopped following a POST's
+  redirect, so a posted query behind a 307 or 308 (an http-to-https upgrade,
+  for example) failed where v0.6.0 had sent it again.
+
+### Changed
+
+- `transport`: a read is followed through a redirect only when the next hop
+  sends the same request. A read with a body (a marked POST, or a
+  `RetryMethods` verb such as PROPFIND) follows a 307 or 308, which keeps the
+  method and body, and gets a 301, 302 or 303 back, because Go would follow
+  those with a GET without the body. A PROPFIND used to be followed that way,
+  so its answer came from a different request. GET and HEAD are unchanged.
+
 ## [0.7.0] - 2026-11-04
 
 ### Changed

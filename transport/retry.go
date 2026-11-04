@@ -9,9 +9,9 @@ import (
 	"time"
 )
 
-// doWithRetry runs req, retrying transient failures for idempotent methods:
-// GET, HEAD and any Options.RetryMethods. Other methods are never retried, so
-// a write is sent at most once.
+// doWithRetry runs req, retrying transient failures for a read: GET, HEAD,
+// any Options.RetryMethods, or a request marked with AsRead. Nothing else is
+// retried, so a write is sent at most once.
 // A transient HTTP status that exhausts retries is returned to the caller as a
 // normal response for status classification.
 //
@@ -21,7 +21,7 @@ import (
 // GetBody for the in-memory body types this package uses (strings/bytes
 // readers), so retries send the full body, not an empty one.
 func (c *Client) doWithRetry(ctx context.Context, req *http.Request) (*http.Response, error) {
-	idempotent := c.isRead(req.Method)
+	idempotent := c.isRead(req)
 	replayable := req.Body == nil || req.Body == http.NoBody || req.GetBody != nil
 
 	for attempt := 0; ; attempt++ {

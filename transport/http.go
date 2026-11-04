@@ -32,12 +32,13 @@ type Options struct {
 	UserAgent string
 	// SameOriginRedirects refuses any redirect that leaves the first request's
 	// scheme, host and port; see sameOriginRedirect. It applies only to the
-	// default Doer.
-	SameOriginRedirects bool
-	// The default Doer never follows a redirect of a write: see
+	// default Doer, which never follows a redirect of a write: see
 	// redirectPolicy.
+	SameOriginRedirects bool
 	// RetryMethods adds request methods that are safe to retry (for example the
-	// read-only CalDAV verbs PROPFIND and REPORT). GET and HEAD always are.
+	// read-only CalDAV verbs PROPFIND and REPORT). GET and HEAD always are. A
+	// single request that only reads, whatever its method, is marked with
+	// AsRead instead.
 	RetryMethods []string
 }
 
@@ -86,17 +87,24 @@ func New(opt Options) *Client {
 var errRedirectPolicy = errors.New("redirect rejected")
 
 // redirectPolicy is the default Doer's CheckRedirect. Only a read is
-// followed: a GET, a HEAD or a method in RetryMethods, the methods this client
-// already treats as safe to send twice. A write is never followed. Go follows
-// a 301, 302 or 303 with a GET, so the response would answer that GET (often
-// a login page), not the write; and it follows a 307 or 308 by sending the
-// write again to wherever the redirect points. Either way a 2xx at the end
-// could read as an acknowledged write that never happened. Returning the
-// redirect itself lets the caller see a non-2xx answer: under the errors
-// package's write rule its outcome is unknown, with the redirect's status.
+// followed (see isRead), and only when the next hop sends the same request.
+//
+// A write is never followed. Go follows a 301, 302 or 303 with a GET, so the
+// response would answer that GET (often a login page), not the write; and it
+// follows a 307 or 308 by sending the write again to wherever the redirect
+// points. Either way a 2xx at the end could read as an acknowledged write
+// that never happened. Returning the redirect itself lets the caller see a
+// non-2xx answer: under the errors package's write rule its outcome is
+// unknown, with the redirect's status.
+//
+// A read other than a GET or HEAD, such as a posted query or a PROPFIND, is
+// followed on a 307 or 308, which Go sends again with the same method and
+// body. On a 301, 302 or 303 Go would send a GET without the body, a
+// different request whose answer is not the read's, so the redirect is
+// returned instead.
 func (c *Client) redirectPolicy(sameOrigin bool) func(*http.Request, []*http.Request) error {
 	return func(req *http.Request, via []*http.Request) error {
-		if len(via) > 0 && !c.isRead(via[0].Method) {
+		if len(via) > 0 && (!c.isRead(via[0]) || method(req) != method(via[0])) {
 			return http.ErrUseLastResponse
 		}
 		if sameOrigin {
@@ -109,14 +117,36 @@ func (c *Client) redirectPolicy(sameOrigin bool) func(*http.Request, []*http.Req
 	}
 }
 
-// isRead reports whether a request with method is a read: GET, HEAD or a
-// method in RetryMethods. Only a read is retried or followed through a
-// redirect. An empty method is a GET, as net/http sends it.
-func (c *Client) isRead(method string) bool {
-	if method == "" {
-		method = http.MethodGet
+type readKey struct{}
+
+// AsRead marks the requests sent with the returned context as reads, whatever
+// their method: they are retried on a transient failure and followed through
+// a redirect as a GET is. Use it for a request that only reads but cannot be
+// a GET, such as a search or a query posted because its parameters do not
+// fit in a URL. Pass the marked context to Client.Do, which gives the request
+// that context. Never mark a request that can change state: a retry or a
+// followed 307 or 308 sends it again.
+func AsRead(ctx context.Context) context.Context {
+	return context.WithValue(ctx, readKey{}, true)
+}
+
+// isRead reports whether req is a read: a GET, a HEAD, a method in
+// RetryMethods, or a request whose context AsRead marked. Only a read is
+// retried or followed through a redirect.
+func (c *Client) isRead(req *http.Request) bool {
+	if marked, _ := req.Context().Value(readKey{}).(bool); marked {
+		return true
 	}
-	return c.retryable[strings.ToUpper(method)]
+	return c.retryable[method(req)]
+}
+
+// method returns req's method in upper case. An empty method is a GET, as
+// net/http sends it.
+func method(req *http.Request) string {
+	if req.Method == "" {
+		return http.MethodGet
+	}
+	return strings.ToUpper(req.Method)
 }
 
 // sameOriginRedirect refuses any redirect that leaves the first hop's origin.
