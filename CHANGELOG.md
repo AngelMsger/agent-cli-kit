@@ -19,6 +19,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reports it as an unknown outcome. A CLI whose server acknowledges a write
   with a redirect (Jenkins answers stop and cancel with a 302 to the previous
   page) must accept that redirect itself.
+- `transport`: GET, HEAD and `RetryMethods` are matched the same way for
+  retries and redirects: case-insensitively, and an empty method (which
+  `net/http` sends as a GET) counts as a GET. A hand-built request with an
+  empty method used to be neither retried nor, under the new redirect rule,
+  followed.
+- `errors.ReadOnlyBlocked`: a `ReadOnlyMode` with only `Env` names only that
+  variable in its hint. It used to add "or defaults.read_only", a setting a
+  CLI without a config file (wecom-channel-cli) does not have.
 - `errors.FromWrite`: an unknown outcome caused by a 3xx response has its own
   hint. It still says not to repeat the write, and names what a redirect
   usually means (a login page, a single sign-on proxy, a base URL that should

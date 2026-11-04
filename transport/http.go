@@ -35,7 +35,7 @@ type Options struct {
 	// default Doer.
 	SameOriginRedirects bool
 	// The default Doer never follows a redirect of a write: see
-	// followsRedirects.
+	// redirectPolicy.
 	// RetryMethods adds request methods that are safe to retry (for example the
 	// read-only CalDAV verbs PROPFIND and REPORT). GET and HEAD always are.
 	RetryMethods []string
@@ -96,7 +96,7 @@ var errRedirectPolicy = errors.New("redirect rejected")
 // package's write rule its outcome is unknown, with the redirect's status.
 func (c *Client) redirectPolicy(sameOrigin bool) func(*http.Request, []*http.Request) error {
 	return func(req *http.Request, via []*http.Request) error {
-		if len(via) > 0 && !c.followsRedirects(via[0].Method) {
+		if len(via) > 0 && !c.isRead(via[0].Method) {
 			return http.ErrUseLastResponse
 		}
 		if sameOrigin {
@@ -109,9 +109,13 @@ func (c *Client) redirectPolicy(sameOrigin bool) func(*http.Request, []*http.Req
 	}
 }
 
-// followsRedirects reports whether a request with method is a read, which a
-// redirect may be followed for.
-func (c *Client) followsRedirects(method string) bool {
+// isRead reports whether a request with method is a read: GET, HEAD or a
+// method in RetryMethods. Only a read is retried or followed through a
+// redirect. An empty method is a GET, as net/http sends it.
+func (c *Client) isRead(method string) bool {
+	if method == "" {
+		method = http.MethodGet
+	}
 	return c.retryable[strings.ToUpper(method)]
 }
 

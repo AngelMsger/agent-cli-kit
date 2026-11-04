@@ -137,7 +137,7 @@ func TestWriteRedirectIsReturnedNotFollowed(t *testing.T) {
 }
 
 // Reads still follow redirects: GET, HEAD and the read verbs a CLI declares
-// in RetryMethods (CalDAV's PROPFIND).
+// in RetryMethods (CalDAV's PROPFIND), and an empty method, which is a GET.
 func TestReadRedirectIsFollowed(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/moved" {
@@ -148,8 +148,10 @@ func TestReadRedirectIsFollowed(t *testing.T) {
 	}))
 	defer srv.Close()
 	c := New(Options{SameOriginRedirects: true, RetryMethods: []string{"PROPFIND"}})
-	for _, method := range []string{http.MethodGet, http.MethodHead, "PROPFIND"} {
-		req, _ := http.NewRequest(method, srv.URL+"/moved", nil)
+	for _, method := range []string{http.MethodGet, http.MethodHead, "PROPFIND", ""} {
+		req, _ := http.NewRequest(http.MethodGet, srv.URL+"/moved", nil)
+		// net/http sends an empty method as a GET; NewRequest would fill it in.
+		req.Method = method
 		resp, err := c.Do(context.Background(), req)
 		if err != nil {
 			t.Fatalf("%s: %v", method, err)

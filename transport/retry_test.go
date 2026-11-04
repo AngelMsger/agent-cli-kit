@@ -83,6 +83,22 @@ func TestRetryMethodsAreOptIn(t *testing.T) {
 	}
 }
 
+// An empty method is a GET, as net/http sends it, so it is retried like one.
+func TestEmptyMethodRetriesAsAGet(t *testing.T) {
+	doer := &recordingDoer{statuses: []int{http.StatusServiceUnavailable, http.StatusOK}}
+	c := New(Options{Doer: doer, MaxRetries: 2, RetryBaseDelay: time.Millisecond})
+	req, _ := http.NewRequest(http.MethodGet, "https://jira.example/rest/api/2/myself", nil)
+	req.Method = ""
+	resp, err := c.Do(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+	resp.Body.Close()
+	if doer.callCount != 2 {
+		t.Fatalf("empty method: %d attempts, want 2 (one retry)", doer.callCount)
+	}
+}
+
 func TestNonReplayableBodyIsNotRetried(t *testing.T) {
 	for _, method := range []string{http.MethodGet, "REPORT"} {
 		t.Run(method, func(t *testing.T) {

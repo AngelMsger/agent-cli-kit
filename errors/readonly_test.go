@@ -39,8 +39,9 @@ func TestReadOnlyBlockedNamesOnlyTheCLIsSwitches(t *testing.T) {
 	if err.Hint != hint || len(err.NextSteps) != 1 || err.NextSteps[0] != "Only if the user authorized this write, re-run with --allow-writes" {
 		t.Fatalf("hint %q, steps %q", err.Hint, err.NextSteps)
 	}
+	// A CLI with no config file has no defaults.read_only to name.
 	env := ReadOnlyBlocked("CreateAlert", ReadOnlyMode{Env: "TOOL_CLI_READ_ONLY"})
-	if want := "Read-only mode is on, so nothing was sent. The user turned it on (TOOL_CLI_READ_ONLY or defaults.read_only), " +
+	if want := "Read-only mode is on, so nothing was sent. The user turned it on (TOOL_CLI_READ_ONLY), " +
 		"and only the user turns it off. --allow-writes lifts it for one invocation and is for a write the user authorized."; env.Hint != want {
 		t.Fatalf("hint %q, want %q", env.Hint, want)
 	}
