@@ -121,7 +121,9 @@ repeat the write", and the read commands as next steps. A 2xx response that
 could not be decoded, `errors.MissingWriteIdentity` (no ID or queue location
 in the response) and `errors.WriteSucceeded` (a later read failed) report a write that
 was applied but whose result cannot be shown, under `WRITE_SUCCEEDED_*` codes
-that keep the identity of what was changed.
+that keep the identity of what was changed. An error that already reports a
+write outcome passes through `FromWrite` unchanged, so a client decorator can
+classify every write without nesting one outcome inside another.
 
 ## Read-only mode and prompts
 
@@ -178,6 +180,13 @@ only some CLIs had is therefore opt-in:
 | `config.Schema.Validate` | URL, credential page and scheme only | jira-cli, confluence-cli and bitbucket-cli check the flavor; prometheus-cli checks the tenant. |
 | `config.Schema.CheckPlan` | none | openobserve-cli refuses to repoint a browser-session context. |
 | `config.Words.SchemeHint` | "Use one of: …" | wecom-calendar-cli explains its only scheme. |
+
+One transport rule is not opt-in: the default Doer follows a redirect only
+for a read (GET, HEAD and `RetryMethods`). A write gets the redirect itself
+back. Following it would answer a different request, usually a GET to a
+login page, or send the write a second time, and a 2xx at the end would
+report a write that never happened. Under the write rule in `errors` a
+write's 3xx is an unknown outcome that keeps its status.
 
 The JSON a CLI prints (the error envelope, the list envelope, `_notice`, the
 update status, the credential recovery errors, and the configuration errors,

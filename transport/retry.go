@@ -21,7 +21,7 @@ import (
 // GetBody for the in-memory body types this package uses (strings/bytes
 // readers), so retries send the full body, not an empty one.
 func (c *Client) doWithRetry(ctx context.Context, req *http.Request) (*http.Response, error) {
-	idempotent := c.retryable[req.Method]
+	idempotent := c.isRead(req.Method)
 	replayable := req.Body == nil || req.Body == http.NoBody || req.GetBody != nil
 
 	for attempt := 0; ; attempt++ {

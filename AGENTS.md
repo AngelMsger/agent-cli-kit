@@ -45,7 +45,9 @@ backend cursor replay. Keep distinct behavior assertions when consolidating test
   rendering reads those projected keys. Preserve numeric JSON tokens without
   converting precise integers through `float64`.
 - Redirect guards retain a bounded hop count, and policy rejections are not
-  transient failures. Retry requests with bodies only when they are replayable.
+  transient failures. Only reads follow a redirect; a write's redirect is
+  returned to the caller. Retry requests with bodies only when they are
+  replayable.
 - Credential save success must not hide an older credential in another backend.
   An inaccessible keychain is not evidence that its account is missing. Report
   partial saves and failed deletes honestly, preserve absent-account deletion

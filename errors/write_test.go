@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	stderrors "errors"
+	"fmt"
 	"net/url"
 	"testing"
 )
@@ -40,7 +41,6 @@ func TestFromWriteUnknownOutcome(t *testing.T) {
 		"network":       Wrap(transportErr, CategoryNetwork, "NETWORK", "request failed"),
 		"server":        New(CategoryServer, "HTTP_503", "temporarily unavailable").WithHTTPStatus(503),
 		"rate limit":    New(CategoryRateLimit, "HTTP_429", "slow down").WithHTTPStatus(429),
-		"redirect":      New(CategoryServer, "HTTP_302", "unexpected redirect").WithHTTPStatus(302),
 		"non-2xx parse": New(CategoryParse, "DECODE", "bad error body").WithHTTPStatus(502),
 		"internal":      New(CategoryInternal, "INTERNAL", "unexpected state"),
 		// Errors a caller passes in without classifying them first.
@@ -56,6 +56,22 @@ func TestFromWriteUnknownOutcome(t *testing.T) {
 			assertWriteOutcome(t, err, cause, ce.Code,
 				"Write outcome is unknown for "+testTarget.Description+": "+ce.Message)
 		})
+	}
+}
+
+// The transport returns a write's redirect instead of following it, so a 3xx
+// reaches FromWrite as the answer to the write. Its outcome is unknown, it
+// keeps the redirect's status, and its hint says what a redirect usually
+// means instead of the generic one.
+func TestFromWriteRedirectIsAnUnknownOutcome(t *testing.T) {
+	for _, status := range []int{301, 302, 303, 307, 308} {
+		cause := New(CategoryServer, "HTTP_REDIRECT", "unexpected redirect").WithHTTPStatus(status)
+		ce := AsCLIError(FromWrite(cause, testTarget))
+		if ce.Message != "Write outcome is unknown for "+testTarget.Description+": unexpected redirect" ||
+			ce.HTTPStatus != status || ce.Retryable || ce.Hint != redirectWriteHint ||
+			len(ce.NextSteps) != 1 || ce.NextSteps[0] != testTarget.ReadSteps[0] {
+			t.Fatalf("%d: got %+v; want an unknown outcome with the redirect hint", status, ce)
+		}
 	}
 }
 
@@ -80,6 +96,26 @@ func TestFromWriteKeepsDefiniteRefusals(t *testing.T) {
 	}
 	if FromWrite(nil, testTarget) != nil {
 		t.Fatal("FromWrite(nil) is not nil")
+	}
+}
+
+// An error that already reports a write outcome passes through FromWrite
+// unchanged, so a decorator that classifies what its inner client already
+// classified does not nest one outcome message inside another.
+func TestFromWriteKeepsAWriteOutcome(t *testing.T) {
+	cause := New(CategoryServer, "HTTP_503", "temporarily unavailable").WithHTTPStatus(503)
+	readFailed := New(CategoryServer, "HTTP_502", "bad gateway").WithHTTPStatus(502)
+	for name, err := range map[string]error{
+		"unknown":          FromWrite(cause, testTarget),
+		"succeeded":        WriteSucceeded(readFailed, CodeWriteSucceededReadFailed, "reading it back failed", testTarget),
+		"missing identity": MissingWriteIdentity(testTarget),
+		"wrapped":          fmt.Errorf("stop build: %w", FromWrite(cause, testTarget)),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := FromWrite(err, WriteTarget{Description: "something else"}); got != err {
+				t.Fatalf("FromWrite rewrapped a write outcome: %+v", AsCLIError(got))
+			}
+		})
 	}
 }
 

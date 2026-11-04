@@ -26,6 +26,12 @@ const (
 const writeHint = "Do not repeat the write. Inspect the remote state using the read command; " +
 	"follow pagination if needed. An empty page is not proof that the write failed."
 
+// redirectWriteHint replaces writeHint when the server answered the write
+// with a redirect, which the transport never follows for a write.
+const redirectWriteHint = "Do not repeat the write. The server answered it with a redirect, " +
+	"which usually means a login page, a single sign-on proxy, or a base URL that should use https. " +
+	"Check the configured base URL and run doctor, then inspect the remote state using the read command."
+
 // WriteTarget names what a write changes, for the error message, and how to
 // see its current state, for the next steps.
 type WriteTarget struct {
@@ -50,7 +56,14 @@ type WriteTarget struct {
 //
 // The rewrapped error keeps the cause's category, code, HTTP status and
 // details, is not retryable, and has the target's read steps as its next
-// steps.
+// steps. A 3xx is one of these unknown outcomes: the transport returns a
+// write's redirect instead of following it, and its hint says what a
+// redirect usually means.
+//
+// An error that already reports a write outcome (from FromWrite,
+// WriteSucceeded or MissingWriteIdentity) is returned unchanged, so a layer
+// that classifies a write its inner client already classified, such as a
+// decorator around a client, does not wrap it twice.
 //
 // The category is read from the outermost CLIError in err's chain, as
 // AsCLIError finds it. A CLI that wraps a transport failure in a refusal
@@ -61,6 +74,9 @@ func FromWrite(err error, target WriteTarget) error {
 		return nil
 	}
 	ce := AsCLIError(err)
+	if ce.writeOutcome {
+		return err
+	}
 	switch ce.Category {
 	case CategoryUsage, CategoryConfig, CategoryAuth, CategoryPermission, CategoryNotFound, CategoryConflict:
 		return err
@@ -69,7 +85,11 @@ func FromWrite(err error, target WriteTarget) error {
 			return WriteSucceeded(err, CodeWriteSucceededResponseInvalid, "its response could not be decoded", target)
 		}
 	}
-	return writeOutcome(err, ce.Code, "Write outcome is unknown for "+target.Description, target)
+	out := writeOutcome(err, ce.Code, "Write outcome is unknown for "+target.Description, target)
+	if ce.HTTPStatus >= 300 && ce.HTTPStatus < 400 {
+		out.Hint = redirectWriteHint
+	}
+	return out
 }
 
 // WriteSucceeded reports a write the server acknowledged whose result cannot
@@ -100,6 +120,7 @@ func writeOutcome(err error, code, message string, target WriteTarget) *CLIError
 		WithHint(writeHint).
 		WithNextSteps(target.ReadSteps...)
 	out.Retryable = false
+	out.writeOutcome = true
 	return out
 }
 

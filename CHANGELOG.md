@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `transport`: the default Doer no longer follows a redirect of a write. A
+  GET, a HEAD or a method in `RetryMethods` still follows redirects as
+  before (same origin only with `SameOriginRedirects`); any other method gets
+  the 3xx response itself. Go followed a 301, 302 or 303 after a write with a
+  GET, so a login page's 200 could read as the write's acknowledgment, and it
+  followed a 307 or 308 by sending the write again to the new location. A CLI
+  that checks for a 2xx now sees the redirect's status, and `FromWrite`
+  reports it as an unknown outcome. A CLI whose server acknowledges a write
+  with a redirect (Jenkins answers stop and cancel with a 302 to the previous
+  page) must accept that redirect itself.
+- `transport`: GET, HEAD and `RetryMethods` are matched the same way for
+  retries and redirects: case-insensitively, and an empty method (which
+  `net/http` sends as a GET) counts as a GET. A hand-built request with an
+  empty method used to be neither retried nor, under the new redirect rule,
+  followed.
+- `errors.ReadOnlyBlocked`: a `ReadOnlyMode` with only `Env` names only that
+  variable in its hint. It used to add "or defaults.read_only", a setting a
+  CLI without a config file (wecom-channel-cli) does not have.
+- `errors.FromWrite`: an unknown outcome caused by a 3xx response has its own
+  hint. It still says not to repeat the write, and names what a redirect
+  usually means (a login page, a single sign-on proxy, a base URL that should
+  use https) before the read command.
+- `errors.FromWrite`: an error that already reports a write outcome (from
+  `FromWrite`, `WriteSucceeded` or `MissingWriteIdentity`) is returned
+  unchanged. A layer that classifies a write its inner client already
+  classified, such as a decorator around a client, used to nest one outcome
+  inside another ("Write outcome is unknown for …: Write outcome is unknown
+  for …").
+
 ## [0.6.0] - 2026-11-02
 
 ### Added

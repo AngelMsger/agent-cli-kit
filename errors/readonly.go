@@ -48,7 +48,7 @@ func switches(mode ReadOnlyMode) string {
 	case mode.Env != "" && mode.ConfigFile != "":
 		return " (" + mode.Env + " or defaults.read_only in " + mode.ConfigFile + ")"
 	case mode.Env != "":
-		return " (" + mode.Env + " or defaults.read_only)"
+		return " (" + mode.Env + ")"
 	case mode.ConfigFile != "":
 		return " (defaults.read_only in " + mode.ConfigFile + ")"
 	}
