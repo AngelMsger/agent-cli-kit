@@ -190,6 +190,10 @@ func sameOriginRedirect(req *http.Request, via []*http.Request) error {
 // Doer has already sent the write a second time.
 func (c *Client) Do(ctx context.Context, req *http.Request) (*http.Response, error) {
 	req = req.WithContext(ctx)
+	// A request reissued from an earlier redirect chain still names the
+	// redirect that created it. That history is not this call's, so the copy
+	// sent here starts without it, and firstAnswer sees only this call's hops.
+	req.Response = nil
 	for _, d := range c.decorators {
 		d(req)
 	}
@@ -197,13 +201,14 @@ func (c *Client) Do(ctx context.Context, req *http.Request) (*http.Response, err
 		req.Header.Set("User-Agent", c.userAgent)
 	}
 	resp, err := c.doWithRetry(ctx, req)
-	if resp != nil && resp.Request == nil {
-		// A custom Doer may build a response without the request it answers;
-		// callers read the request's method and URL from it.
-		resp.Request = req
-	}
 	if resp != nil && !c.isRead(req) {
 		resp = firstAnswer(resp, err)
+	}
+	if resp != nil && resp.Request == nil {
+		// A custom Doer may build a response without the request it answers;
+		// callers read the request's method and URL from it. A first redirect
+		// answered req itself, so this also holds for one firstAnswer chose.
+		resp.Request = req
 	}
 	return resp, err
 }
@@ -217,7 +222,7 @@ func (c *Client) Do(ctx context.Context, req *http.Request) (*http.Response, err
 // replaces it and the error stays.
 func firstAnswer(resp *http.Response, err error) *http.Response {
 	redirect := resp.StatusCode >= 300 && resp.StatusCode < 400
-	followed := resp.Request.Response != nil
+	followed := resp.Request != nil && resp.Request.Response != nil
 	if (err != nil && !redirect) || (err == nil && !followed) {
 		return resp
 	}

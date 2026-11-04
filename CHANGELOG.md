@@ -37,7 +37,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `transport`: a response from `Do` always names the request it answers.
   When a custom Doer returns a response without `Request` (a synthetic one,
   say), `Do` sets it, so a caller can read the request's method and URL from
-  any response.
+  any response, including a write's first redirect. A request reissued from
+  an earlier redirect chain is sent without that chain's `Response`, so an
+  old redirect is never taken for this write's answer.
 
 ## [0.7.0] - 2026-11-04
 

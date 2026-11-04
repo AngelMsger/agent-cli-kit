@@ -442,3 +442,49 @@ func TestNonReplayableMarkedPostIsSentOnce(t *testing.T) {
 		}
 	}
 }
+
+// A request reissued from an earlier redirect chain still names the redirect
+// that created it. That history is not this call's: the write is answered by
+// this call's own response, with the default Doer and with a custom one.
+func TestStaleRedirectHistoryIsNotThisCallsAnswer(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer srv.Close()
+	created := doerFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusCreated, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(""))}, nil
+	})
+	for name, doer := range map[string]Doer{"default": nil, "custom without Request": created} {
+		earlier, _ := http.NewRequest(http.MethodPost, srv.URL+"/old", nil)
+		req, _ := http.NewRequest(http.MethodPost, srv.URL+"/write", strings.NewReader("x"))
+		req.Response = &http.Response{StatusCode: http.StatusFound, Header: http.Header{}, Body: http.NoBody, Request: earlier}
+		resp, err := New(Options{Doer: doer}).Do(context.Background(), req)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusCreated || resp.Request == nil || resp.Request.URL.Path != "/write" || resp.Request.Response != nil {
+			t.Fatalf("%s: got %d for %+v; want this call's 201", name, resp.StatusCode, resp.Request)
+		}
+	}
+}
+
+// A custom Doer may supply a chain whose first redirect does not name its
+// request. The first redirect answered the write itself, so Do names it.
+func TestRecoveredFirstRedirectNamesItsRequest(t *testing.T) {
+	doer := doerFunc(func(req *http.Request) (*http.Response, error) {
+		first := &http.Response{StatusCode: http.StatusFound, Header: http.Header{"Location": {"/login"}}, Body: http.NoBody}
+		hop, _ := http.NewRequest(http.MethodGet, "https://example.test/login", nil)
+		hop.Response = first
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader("sign in")), Request: hop}, nil
+	})
+	req, _ := http.NewRequest(http.MethodPost, "https://example.test/job/app/7/stop", strings.NewReader("x"))
+	resp, err := New(Options{Doer: doer}).Do(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusFound || resp.Request == nil || resp.Request.Method != http.MethodPost || resp.Request.URL.Path != "/job/app/7/stop" {
+		t.Fatalf("got %d for %+v; want the first redirect naming the write", resp.StatusCode, resp.Request)
+	}
+}

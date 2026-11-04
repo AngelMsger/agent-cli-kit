@@ -189,9 +189,10 @@ request. A write gets the redirect itself back, even from a custom
 returned its last redirect (the error comes back too). Following it would
 answer a different request, usually a GET to a login page, or send the
 write a second time, and a 2xx at the end would report a write that never
-happened. Under
-the write rule in `errors` a write's 3xx is an unknown outcome that keeps its
-status.
+happened. Under the write rule in `errors` a write's 3xx is an unknown
+outcome that keeps its status, when the CLI builds its error from that
+response. A Doer's error returned with the redirect carries no status, so it
+is an unknown outcome without one.
 
 A CLI marks a read that cannot be a GET with `transport.AsRead(ctx)`: a
 search or a query posted because its parameters do not fit in a URL
