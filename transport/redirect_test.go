@@ -318,15 +318,16 @@ func (f doerFunc) Do(req *http.Request) (*http.Response, error) { return f(req) 
 
 type trackedBody struct {
 	io.Reader
-	closed bool
+	closes int
 }
 
-func (b *trackedBody) Close() error { b.closed = true; return nil }
+func (b *trackedBody) Close() error { b.closes++; return nil }
 
-// A custom Doer may answer a write with any response and error. A 3xx keeps
-// its error and its body is closed, not lost; any other response comes back
-// with its error unchanged.
-func TestCustomDoerWriteKeepsItsErrorAndClosesTheBody(t *testing.T) {
+// A custom Doer may answer a write with any response and an error. The error
+// stays, and a 3xx is still the write's answer with an empty body. As with
+// *http.Client, a body returned with an error is the Doer's to have closed,
+// so Do never closes it again: a second Close is not safe for every body.
+func TestCustomDoerWriteKeepsItsError(t *testing.T) {
 	failure := errors.New("unexpected EOF")
 	for _, status := range []int{http.StatusFound, http.StatusOK, http.StatusBadGateway} {
 		body := &trackedBody{Reader: strings.NewReader("page")}
@@ -339,9 +340,29 @@ func TestCustomDoerWriteKeepsItsErrorAndClosesTheBody(t *testing.T) {
 			t.Fatalf("%d: got %v, %v; want the response with its error", status, resp, err)
 		}
 		redirect := status >= 300 && status < 400
-		if body.closed != redirect || (resp.Body == http.NoBody) != redirect {
-			t.Fatalf("%d: body closed=%v, replaced=%v; want both only for a redirect", status, body.closed, resp.Body == http.NoBody)
+		if body.closes != 0 || (resp.Body == http.NoBody) != redirect {
+			t.Fatalf("%d: body closed %d times, replaced=%v; want it never closed, replaced only for a redirect", status, body.closes, resp.Body == http.NoBody)
 		}
+	}
+}
+
+// The page a followed write redirect led to is closed exactly once, by Do.
+func TestCustomDoerWriteClosesTheDiscardedPageOnce(t *testing.T) {
+	page := &trackedBody{Reader: strings.NewReader("sign in")}
+	c := New(Options{Doer: doerFunc(func(req *http.Request) (*http.Response, error) {
+		first := &http.Response{StatusCode: http.StatusFound, Header: http.Header{"Location": {"/login"}}, Body: http.NoBody, Request: req}
+		hop, _ := http.NewRequest(http.MethodGet, "https://example.test/login", nil)
+		hop.Response = first
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: page, Request: hop}, nil
+	})})
+	req, _ := http.NewRequest(http.MethodPost, "https://example.test/write", strings.NewReader("x"))
+	resp, err := c.Do(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusFound || page.closes != 1 {
+		t.Fatalf("got %d with the page closed %d times; want the first redirect and one close", resp.StatusCode, page.closes)
 	}
 }
 

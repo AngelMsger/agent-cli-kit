@@ -30,8 +30,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   body, instead of the page it led to, which it closes unread. When the Doer
   stopped following with an error and returned its last redirect (its own
   `CheckRedirect` refused a hop, or it reached Go's 10-hop limit), `Do`
-  returns the first redirect with that error. v0.7.0 covered only the
-  default Doer, so a library caller that passed its own client could still
+  returns the first redirect with that error. `Doer` now states
+  `*http.Client`'s contract: a response returned with an error has its body
+  closed already, so neither `Do` nor the retry loop closes it again.
+  v0.7.0 covered only the default Doer, so a library caller that passed its own client could still
   read a login page's 200 as the write's acknowledgment once a CLI dropped
   its local check.
 - `transport`: a response from `Do` always names the request it answers.

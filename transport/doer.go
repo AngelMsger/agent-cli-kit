@@ -13,6 +13,9 @@ import (
 )
 
 // Doer executes an HTTP request. *http.Client satisfies it; tests inject fakes.
+// It keeps *http.Client's contract: a response returned together with an
+// error (a redirect its CheckRedirect refused) has its body closed already,
+// so the Client never closes that body again.
 type Doer interface {
 	Do(*http.Request) (*http.Response, error)
 }

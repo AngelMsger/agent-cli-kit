@@ -230,7 +230,8 @@ func firstAnswer(resp *http.Response, err error) *http.Response {
 	for first.Request != nil && first.Request.Response != nil {
 		first = first.Request.Response
 	}
-	if resp.Body != nil {
+	if err == nil && resp.Body != nil {
+		// With an error the Doer has closed it already (see Doer).
 		_ = resp.Body.Close()
 	}
 	first.Body = http.NoBody
