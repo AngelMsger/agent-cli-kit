@@ -181,21 +181,26 @@ func sameOriginRedirect(req *http.Request, via []*http.Request) error {
 // a non-nil Request: the request it answers, even when a custom Doer left it
 // unset. The context bounds the whole retry sequence.
 //
-// A write is answered by its first response. The default Doer never follows
-// a write's redirect; when a custom Doer (an *http.Client with Go's default
-// policy, say) followed one anyway, Do returns the redirect the chain began
-// with, with an empty body, instead of the page it led to. When the Doer
-// stopped following with an error and returned its last redirect (its
-// CheckRedirect refused a hop, or Go's 10-hop limit), Do returns the first
-// redirect with that error. The write rule in
-// errors then reports an unknown outcome, as it does with the default Doer:
-// the page at the end answered a different request, and on a 307 or 308 the
-// Doer has already sent the write a second time.
+// A request is answered by the last response to a hop this call stands
+// behind: for a write, only the request it sent; for a read, any hop that
+// kept its method. The default Doer never follows past such a hop. When a
+// custom Doer (an *http.Client with Go's default policy, say) followed
+// further anyway, Do returns the redirect that left those hops, with an
+// empty body, instead of the page it led to: a write's first redirect, or
+// the redirect that turned a read with a body (a POST marked with AsRead, a
+// method in RetryMethods) into a GET without it. When the Doer stopped
+// following with an error and returned its last redirect (its CheckRedirect
+// refused a hop, or Go's 10-hop limit), Do returns that answer with the
+// error. The write rule in errors then reports a write's unknown outcome, as
+// it does with the default Doer: the page at the end answered a different
+// request, and on a 307 or 308 the Doer has already sent the write a second
+// time. A read gets the redirect, a non-2xx answer, instead of a page that
+// answered another request.
 func (c *Client) Do(ctx context.Context, req *http.Request) (*http.Response, error) {
 	req = req.WithContext(ctx)
 	// A request reissued from an earlier redirect chain still names the
 	// redirect that created it. That history is not this call's, so the copy
-	// sent here starts without it, and firstAnswer sees only this call's hops.
+	// sent here starts without it, and answer sees only this call's hops.
 	req.Response = nil
 	for _, d := range c.decorators {
 		d(req)
@@ -204,39 +209,60 @@ func (c *Client) Do(ctx context.Context, req *http.Request) (*http.Response, err
 		req.Header.Set("User-Agent", c.userAgent)
 	}
 	resp, err := c.doWithRetry(ctx, req)
-	if resp != nil && !c.isRead(req) {
-		resp = firstAnswer(resp, err)
+	if resp != nil {
+		resp = answer(resp, err, c.standsBehind(req))
 	}
 	if resp != nil && resp.Request == nil {
 		// A custom Doer may build a response without the request it answers;
 		// callers read the request's method and URL from it. A first redirect
-		// answered req itself, so this also holds for one firstAnswer chose.
+		// answered req itself, so this also holds for one answer chose.
 		resp.Request = req
 	}
 	return resp, err
 }
 
-// firstAnswer returns the redirect a write's chain of responses began with, or
-// resp itself when it answered the write directly. net/http links each
-// followed hop's request to the redirect that caused it. The page at the end
-// is closed unread, since it can be large or never end. A Doer that stopped
-// following with an error (its CheckRedirect refused a hop, or it hit its hop
-// limit) returns its last redirect with that error; the first redirect
-// replaces it and the error stays.
-func firstAnswer(resp *http.Response, err error) *http.Response {
+// standsBehind reports which hops of req's redirect chain a response may
+// answer req from. A write stands behind only the request Do sent, the one
+// hop without an earlier redirect. A read stands behind every hop that kept
+// its method: a 307 or 308 sends the same read again, while a GET that Go
+// sends for a 301, 302 or 303 drops a read's body and is another request.
+func (c *Client) standsBehind(req *http.Request) func(*http.Request) bool {
+	if !c.isRead(req) {
+		return func(hop *http.Request) bool { return hop.Response == nil }
+	}
+	m := method(req)
+	return func(hop *http.Request) bool { return method(hop) == m }
+}
+
+// answer returns the last response in resp's redirect chain to a hop that
+// stands behind the request (see standsBehind), or resp itself when its own
+// request does. net/http links each followed hop's request to the redirect
+// that caused it. When a later hop answered, the page at the end is closed
+// unread, since it can be large or never end, and the redirect chosen gets
+// an empty body (net/http closed its own when it followed). A Doer that
+// stopped following with an error (its CheckRedirect refused a hop, or it hit
+// its hop limit) returns its last redirect with that error and its body
+// closed; the answer replaces it, with an empty body, and the error stays. A
+// response that is not a redirect, returned with an error, is left as it is.
+func answer(resp *http.Response, err error, stands func(*http.Request) bool) *http.Response {
 	redirect := resp.StatusCode >= 300 && resp.StatusCode < 400
-	followed := resp.Request != nil && resp.Request.Response != nil
-	if (err != nil && !redirect) || (err == nil && !followed) {
+	if err != nil && !redirect {
 		return resp
 	}
-	first := resp
-	for first.Request != nil && first.Request.Response != nil {
-		first = first.Request.Response
+	answered := resp
+	for answered.Request != nil && !stands(answered.Request) && answered.Request.Response != nil {
+		answered = answered.Request.Response
 	}
-	if err == nil && resp.Body != nil {
-		// With an error the Doer has closed it already (see Doer).
-		_ = resp.Body.Close()
+	if err == nil {
+		if answered == resp {
+			return resp
+		}
+		if resp.Body != nil {
+			_ = resp.Body.Close()
+		}
 	}
-	first.Body = http.NoBody
-	return first
+	// With an error the Doer has closed the redirect's body already (see
+	// Doer), so it reads as empty instead of failing.
+	answered.Body = http.NoBody
+	return answered
 }

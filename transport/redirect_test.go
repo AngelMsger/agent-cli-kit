@@ -509,3 +509,85 @@ func TestRecoveredFirstRedirectNamesItsRequest(t *testing.T) {
 		t.Fatalf("got %d for %+v; want the first redirect naming the write", resp.StatusCode, resp.Request)
 	}
 }
+
+// A custom Doer keeps its own redirect policy, so Go's default client follows
+// a marked POST read's 302 with a GET that carries no body: a different
+// request, whose 200 (here an empty JSON object) would read as the read's
+// answer. Do answers the read with the last response to a request that kept
+// its method, as the default Doer does by not following: the 302 here. A
+// method in RetryMethods is held to the same rule. Before, only a write's
+// chain was cut back, so a posted search through a caller's *http.Client
+// decoded the GET's page as an empty result.
+func TestCustomDoerBodyReadIsNotAnsweredByAGet(t *testing.T) {
+	for _, status := range []int{http.StatusMovedPermanently, http.StatusFound, http.StatusSeeOther} {
+		for _, method := range []string{http.MethodPost, "PROPFIND"} {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/page" {
+					_, _ = w.Write([]byte("{}"))
+					return
+				}
+				http.Redirect(w, r, "/page", status)
+			}))
+			c := New(Options{Doer: &http.Client{}, RetryMethods: []string{"PROPFIND"}})
+			req, _ := http.NewRequest(method, srv.URL+"/search", strings.NewReader("query=up"))
+			resp, err := c.Do(AsRead(context.Background()), req)
+			if err != nil {
+				t.Fatalf("%s %d: %v", method, status, err)
+			}
+			body, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if resp.StatusCode != status || resp.Request.Method != method || resp.Request.URL.Path != "/search" || len(body) != 0 {
+				t.Fatalf("%s %d: got %d for %s %s with %q; want the redirect that changed the method",
+					method, status, resp.StatusCode, resp.Request.Method, resp.Request.URL.Path, body)
+			}
+			srv.Close()
+		}
+	}
+}
+
+// A read may follow a 307 or 308, which sends the same method and body
+// again, so through a custom Doer it still ends at the page those hops lead
+// to. When a later hop turns it into a GET, the read is answered by the
+// redirect that did: the last response to a request with the read's method.
+func TestCustomDoerBodyReadKeepsItsSameMethodHops(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/a":
+			http.Redirect(w, r, "/b", http.StatusTemporaryRedirect)
+		case "/b":
+			b, _ := io.ReadAll(r.Body)
+			_, _ = w.Write(b)
+		case "/c":
+			http.Redirect(w, r, "/d", http.StatusTemporaryRedirect)
+		case "/d":
+			http.Redirect(w, r, "/page", http.StatusFound)
+		default:
+			_, _ = w.Write([]byte("{}"))
+		}
+	}))
+	defer srv.Close()
+	c := New(Options{Doer: &http.Client{}})
+
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/a", strings.NewReader("query=up"))
+	resp, err := c.Do(AsRead(context.Background()), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || resp.Request.URL.Path != "/b" || string(body) != "query=up" {
+		t.Fatalf("307: got %d for %s with %q; want the read followed with its body", resp.StatusCode, resp.Request.URL.Path, body)
+	}
+
+	req, _ = http.NewRequest(http.MethodPost, srv.URL+"/c", strings.NewReader("query=up"))
+	resp, err = c.Do(AsRead(context.Background()), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusFound || resp.Request.Method != http.MethodPost || resp.Request.URL.Path != "/d" || len(body) != 0 {
+		t.Fatalf("307 then 302: got %d for %s %s with %q; want the 302 that turned it into a GET",
+			resp.StatusCode, resp.Request.Method, resp.Request.URL.Path, body)
+	}
+}
