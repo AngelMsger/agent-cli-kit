@@ -33,9 +33,9 @@ type Options struct {
 	// UserAgent is set on requests that carry none, e.g. "example-cli/1.2.3".
 	UserAgent string
 	// SameOriginRedirects refuses any redirect that leaves the first request's
-	// scheme, host and port; see sameOriginRedirect. It applies only to the
-	// default Doer, which never follows a redirect of a write: see
-	// redirectPolicy.
+	// scheme, host and port; see sameOriginRedirect. The refused redirect is
+	// the answer. It applies only to the default Doer, which never follows a
+	// redirect of a write: see redirectPolicy.
 	SameOriginRedirects bool
 	// RetryMethods adds request methods that are safe to retry (for example the
 	// read-only CalDAV verbs PROPFIND and REPORT). GET and HEAD always are. A
@@ -104,6 +104,12 @@ var errRedirectPolicy = errors.New("redirect rejected")
 // body. On a 301, 302 or 303 Go would send a GET without the body, a
 // different request whose answer is not the read's, so the redirect is
 // returned instead.
+//
+// A hop this policy refuses (one that leaves the origin under
+// SameOriginRedirects, or the tenth) is returned as the answer too: Do drops
+// the policy's error, so the caller sees the redirect's status and Location,
+// not a network failure. The same request is redirected again, so it is not
+// retried.
 func (c *Client) redirectPolicy(sameOrigin bool) func(*http.Request, []*http.Request) error {
 	return func(req *http.Request, via []*http.Request) error {
 		if len(via) > 0 && (!c.isRead(via[0]) || method(req) != method(via[0])) {
@@ -176,7 +182,7 @@ func sameOriginRedirect(req *http.Request, via []*http.Request) error {
 // Do sends req, applying decorators and retrying transient failures. With a
 // nil error, the returned response has a readable, non-nil Body that the
 // caller must close. A response returned together with an error (a redirect
-// the Doer refused to follow) has its body closed already, as with
+// a custom Doer refused to follow) has its body closed already, as with
 // *http.Client; the caller must not close it again. Any returned response has
 // a non-nil Request: the request it answers, even when a custom Doer left it
 // unset. The context bounds the whole retry sequence.
@@ -191,7 +197,8 @@ func sameOriginRedirect(req *http.Request, via []*http.Request) error {
 // method in RetryMethods) into a GET without it. When the Doer stopped
 // following with an error and returned its last redirect (its CheckRedirect
 // refused a hop, or Go's 10-hop limit), Do returns that answer with the
-// error. The write rule in errors then reports a write's unknown outcome, as
+// error. The default Doer's own refusals are the exception: their answer
+// comes back without an error (see redirectPolicy). The write rule in errors then reports a write's unknown outcome, as
 // it does with the default Doer: the page at the end answered a different
 // request, and on a 307 or 308 the Doer has already sent the write a second
 // time. A read gets the redirect, a non-2xx answer, instead of a page that

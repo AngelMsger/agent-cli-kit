@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `errors`: `CLIError.WithRedirect(location, RedirectGuide)` is the family's
+  rule for a 3xx a CLI gets back from the transport. The error keeps the
+  CLI's code, category and HTTP status, and is not retryable: the same
+  request is redirected again. Its hint says where the redirect points
+  (scheme, host and path only; the query can carry a sign-in token), what
+  that usually means (a login page, a single sign-on proxy, or a server URL
+  that should use https), and the setting `RedirectGuide.Setting` names; its
+  next steps are `RedirectGuide.Steps`. A 3xx without a `Location` (a 300 or
+  304) gets a hint that the same request gets the same answer. `IsRedirect`
+  reports which errors it classified as a redirect. Until now each CLI wrote
+  its own 3xx branch, and three of them still called a redirect retryable.
+- `doctor`: `Status`, `RecoveryScope` and `Detail` turn a check's error into
+  its report fields, as the seven CLIs' identical copies did, plus one new
+  status: `redirected`, for an error `WithRedirect` classified, with its hint
+  in the detail. Before, a redirect read as `unreachable` with only "returned
+  HTTP 302", although the server answered and its URL is what needs fixing.
+
+### Changed
+
+- `transport`: a redirect the default Doer refuses to follow (one that
+  leaves the origin under `SameOriginRedirects`, or the tenth hop of a
+  chain) is returned as the answer, with an empty body and no error, as a
+  redirect it does not follow for any other reason already is. Before, `Do`
+  returned it with a `redirect rejected` error, so a CLI reported it as a
+  network failure (DNS, TLS or timeout) marked retryable, although the kit
+  never retried it. It is still not retried, and a custom `Options.Doer`'s
+  own refusal still comes back with its error.
+
 ## [0.8.1] - 2026-11-05
 
 ### Fixed

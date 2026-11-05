@@ -18,7 +18,7 @@ go get github.com/angelmsger/agent-cli-kit@latest
 
 | Package | What it does |
 |---|---|
-| `errors` | Categorized `CLIError`, exit codes, HTTP status mapping and the JSON error envelope agents parse. Also the family's write-outcome rule (`FromWrite`, `WriteSucceeded`) and its one `READONLY_BLOCKED` wording (`ReadOnlyBlocked`). |
+| `errors` | Categorized `CLIError`, exit codes, HTTP status mapping and the JSON error envelope agents parse. Also the family's write-outcome rule (`FromWrite`, `WriteSucceeded`), its redirect rule (`WithRedirect`) and its one `READONLY_BLOCKED` wording (`ReadOnlyBlocked`). |
 | `output` | JSON and table rendering, `--fields` projection, the list envelope with pagination and `_notice`. |
 | `transport` | HTTP client with decorators, bounded retries that replay the request body, and optional `--verbose` logging. |
 | `credstore` | Secret storage in the OS keychain with a protected file fallback. Probes macOS for a default keychain first. `Lookup` reports what each backend answered. |
@@ -28,6 +28,7 @@ go get github.com/angelmsger/agent-cli-kit@latest
 | `update` | Cached check against a repository's latest GitHub release. |
 | `skill` | Read-only Skill version, load-state and installation inspection over caller-supplied `fs.FS`, plus agent integration directory metadata. |
 | `terminal` | Whether a stream is an interactive terminal (`Is`), and prompts that read and write the command's own streams (`Prompter`: line, choice, confirm, hidden secret). |
+| `doctor` | How a `doctor` check's error becomes its status (`ok`, `rejected_by_server`, `redirected`, `unreachable` …), recovery scope and detail. The report and its next steps stay with each CLI. |
 | `reuse` | The `auth reuse` decision: which stored login a context adopts, in what order, on what evidence and within what deadline. A CLI describes its contexts and supplies resolution, verification and the config write. |
 
 ## What each CLI supplies
@@ -124,6 +125,29 @@ was applied but whose result cannot be shown, under `WRITE_SUCCEEDED_*` codes
 that keep the identity of what was changed. An error that already reports a
 write outcome passes through `FromWrite` unchanged, so a client decorator can
 classify every write without nesting one outcome inside another.
+
+## Redirects
+
+The transport returns a redirect instead of following it when following
+would answer a different request (any write, or a read whose method a 301,
+302 or 303 would turn into a GET), when the hop leaves the origin under
+`SameOriginRedirects`, or at the tenth hop. Each comes back as the answer,
+with its status and `Location`, never as a network error, and is not
+retried. A CLI builds its error for any 3xx with
+`WithRedirect(location, errors.RedirectGuide{Setting, Steps})`, where the
+location is `resp.Location()` (nil when there is none). The error keeps the
+CLI's code, category and HTTP status, is not retryable (the same request is
+redirected again), and gets one hint for the family: where the redirect
+points (scheme, host and path; never the query, which can carry a sign-in
+token), what a redirect usually means (a login page, a single sign-on
+proxy, or a server URL that should use https), and the CLI's setting to
+check. A 3xx without a `Location` (a 300 or 304) gets a hint that the same
+request gets the same answer. `FromWrite` still gives a write's redirect
+its own hint and read steps.
+
+A CLI's `doctor` maps each check's error with `doctor.Status`,
+`doctor.RecoveryScope` and `doctor.Detail`, so a redirect reads as
+`redirected`, with the hint in its detail, rather than `unreachable`.
 
 ## Read-only mode and prompts
 
