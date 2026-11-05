@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `transport`: a read with a body is answered by the last response to a
+  request that kept its method, with any Doer. When a custom `Options.Doer`
+  (an `*http.Client` with Go's default policy, say) followed a POST marked
+  with `AsRead`, or a `RetryMethods` verb, through a 301, 302 or 303, it sent
+  a GET without the body, and the page that GET got read as the read's
+  answer: a posted search could decode a login page's `{}` as an empty
+  result. `Do` now returns the redirect that turned it into a GET, with an
+  empty body, and closes the page unread, as it does for a write. 307 and 308
+  hops, which keep the method and body, are still followed. Retries are
+  decided by that answer too: a 503 (with its `Retry-After`) at the end of
+  such a GET no longer sends the read again. The default Doer never followed
+  such a hop, so the CLIs are unaffected; this closes the gap for library
+  callers that pass their own client.
+
 ## [0.8.0] - 2026-11-04
 
 ### Added

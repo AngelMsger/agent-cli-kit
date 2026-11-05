@@ -15,6 +15,11 @@ import (
 // A transient HTTP status that exhausts retries is returned to the caller as a
 // normal response for status classification.
 //
+// Each attempt is classified by its answer (see answer), not by the page a
+// custom Doer's redirects led to: a 503 at the end of a GET that Go sent for
+// a read's 302 is not the read's failure, so the read is not sent again and
+// that page's Retry-After is not waited for.
+//
 // Requests with a body (e.g. CalDAV REPORT) can only be retried if the
 // body is replayable: the first Do consumes and closes req.Body, so before each
 // subsequent attempt we reset it from req.GetBody. http.NewRequest populates
@@ -23,6 +28,7 @@ import (
 func (c *Client) doWithRetry(ctx context.Context, req *http.Request) (*http.Response, error) {
 	idempotent := c.isRead(req)
 	replayable := req.Body == nil || req.Body == http.NoBody || req.GetBody != nil
+	stands := c.standsBehind(req)
 
 	for attempt := 0; ; attempt++ {
 		if attempt > 0 && req.GetBody != nil {
@@ -33,6 +39,9 @@ func (c *Client) doWithRetry(ctx context.Context, req *http.Request) (*http.Resp
 			req.Body = body
 		}
 		resp, err := c.doer.Do(req)
+		if resp != nil {
+			resp = answer(resp, err, stands)
+		}
 		if err == nil && !isTransientStatus(resp.StatusCode) {
 			return resp, nil
 		}
