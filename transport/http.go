@@ -195,7 +195,8 @@ func sameOriginRedirect(req *http.Request, via []*http.Request) error {
 // it does with the default Doer: the page at the end answered a different
 // request, and on a 307 or 308 the Doer has already sent the write a second
 // time. A read gets the redirect, a non-2xx answer, instead of a page that
-// answered another request.
+// answered another request. Each attempt is retried, or not, by this answer:
+// a transient failure of the page the redirect led to is not the read's.
 func (c *Client) Do(ctx context.Context, req *http.Request) (*http.Response, error) {
 	req = req.WithContext(ctx)
 	// A request reissued from an earlier redirect chain still names the
@@ -209,9 +210,6 @@ func (c *Client) Do(ctx context.Context, req *http.Request) (*http.Response, err
 		req.Header.Set("User-Agent", c.userAgent)
 	}
 	resp, err := c.doWithRetry(ctx, req)
-	if resp != nil {
-		resp = answer(resp, err, c.standsBehind(req))
-	}
 	if resp != nil && resp.Request == nil {
 		// A custom Doer may build a response without the request it answers;
 		// callers read the request's method and URL from it. A first redirect

@@ -259,10 +259,9 @@ func TestCustomDoerWriteIsAnsweredByItsRedirect(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%d: %v", status, err)
 		}
-		body, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		if resp.StatusCode != status || resp.Request.URL.Path != "/write" || len(body) != 0 {
-			t.Fatalf("%d: got %d for %s with %q; want the first redirect", status, resp.StatusCode, resp.Request.URL.Path, body)
+		requireRecoveredRedirect(t, fmt.Sprint(status), resp)
+		if resp.StatusCode != status || resp.Request.URL.Path != "/write" {
+			t.Fatalf("%d: got %d for %s; want the first redirect", status, resp.StatusCode, resp.Request.URL.Path)
 		}
 
 		// A read through the same Doer still ends where its redirects lead.
@@ -304,10 +303,9 @@ func TestCustomDoerWriteRedirectErrorIsAnsweredByItsRedirect(t *testing.T) {
 		if err == nil || resp == nil {
 			t.Fatalf("%s: got %v, %v; want the first redirect with the Doer's error", name, resp, err)
 		}
-		body, readErr := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		if resp.StatusCode != http.StatusFound || resp.Request.URL.Path != "/write" || len(body) != 0 || readErr != nil {
-			t.Fatalf("%s: got %d for %s with %q (%v); want the first redirect", name, resp.StatusCode, resp.Request.URL.Path, body, readErr)
+		requireRecoveredRedirect(t, name, resp)
+		if resp.StatusCode != http.StatusFound || resp.Request.URL.Path != "/write" {
+			t.Fatalf("%s: got %d for %s; want the first redirect", name, resp.StatusCode, resp.Request.URL.Path)
 		}
 	}
 }
@@ -510,17 +508,41 @@ func TestRecoveredFirstRedirectNamesItsRequest(t *testing.T) {
 	}
 }
 
+// bodyReads are the two ways a request with a body is a read: a POST marked
+// with AsRead, and a method in RetryMethods (PROPFIND here) sent unmarked.
+var bodyReads = []struct {
+	method string
+	ctx    func() context.Context
+}{
+	{http.MethodPost, func() context.Context { return AsRead(context.Background()) }},
+	{"PROPFIND", context.Background},
+}
+
+// requireRecoveredRedirect fails unless resp's body is http.NoBody, the empty
+// body Do gives a redirect it answers with in place of the page it led to,
+// and reads as empty without an error.
+func requireRecoveredRedirect(t *testing.T, name string, resp *http.Response) {
+	t.Helper()
+	if resp.Body != http.NoBody {
+		t.Fatalf("%s: body is %T; want http.NoBody", name, resp.Body)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil || len(body) != 0 {
+		t.Fatalf("%s: read %q (%v); want an empty body", name, body, err)
+	}
+}
+
 // A custom Doer keeps its own redirect policy, so Go's default client follows
-// a marked POST read's 302 with a GET that carries no body: a different
-// request, whose 200 (here an empty JSON object) would read as the read's
-// answer. Do answers the read with the last response to a request that kept
-// its method, as the default Doer does by not following: the 302 here. A
-// method in RetryMethods is held to the same rule. Before, only a write's
-// chain was cut back, so a posted search through a caller's *http.Client
-// decoded the GET's page as an empty result.
+// a body read's 302 with a GET that carries no body: a different request,
+// whose 200 (here an empty JSON object) would read as the read's answer. Do
+// answers the read with the last response to a request that kept its method,
+// as the default Doer does by not following: the 302 here. Before, only a
+// write's chain was cut back, so a posted search through a caller's
+// *http.Client decoded the GET's page as an empty result.
 func TestCustomDoerBodyReadIsNotAnsweredByAGet(t *testing.T) {
 	for _, status := range []int{http.StatusMovedPermanently, http.StatusFound, http.StatusSeeOther} {
-		for _, method := range []string{http.MethodPost, "PROPFIND"} {
+		for _, read := range bodyReads {
+			name := fmt.Sprintf("%s %d", read.method, status)
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Path == "/page" {
 					_, _ = w.Write([]byte("{}"))
@@ -529,16 +551,15 @@ func TestCustomDoerBodyReadIsNotAnsweredByAGet(t *testing.T) {
 				http.Redirect(w, r, "/page", status)
 			}))
 			c := New(Options{Doer: &http.Client{}, RetryMethods: []string{"PROPFIND"}})
-			req, _ := http.NewRequest(method, srv.URL+"/search", strings.NewReader("query=up"))
-			resp, err := c.Do(AsRead(context.Background()), req)
+			req, _ := http.NewRequest(read.method, srv.URL+"/search", strings.NewReader("query=up"))
+			resp, err := c.Do(read.ctx(), req)
 			if err != nil {
-				t.Fatalf("%s %d: %v", method, status, err)
+				t.Fatalf("%s: %v", name, err)
 			}
-			body, _ := io.ReadAll(resp.Body)
-			resp.Body.Close()
-			if resp.StatusCode != status || resp.Request.Method != method || resp.Request.URL.Path != "/search" || len(body) != 0 {
-				t.Fatalf("%s %d: got %d for %s %s with %q; want the redirect that changed the method",
-					method, status, resp.StatusCode, resp.Request.Method, resp.Request.URL.Path, body)
+			requireRecoveredRedirect(t, name, resp)
+			if resp.StatusCode != status || resp.Request.Method != read.method || resp.Request.URL.Path != "/search" {
+				t.Fatalf("%s: got %d for %s %s; want the redirect that changed the method",
+					name, resp.StatusCode, resp.Request.Method, resp.Request.URL.Path)
 			}
 			srv.Close()
 		}
@@ -556,7 +577,7 @@ func TestCustomDoerBodyReadKeepsItsSameMethodHops(t *testing.T) {
 			http.Redirect(w, r, "/b", http.StatusTemporaryRedirect)
 		case "/b":
 			b, _ := io.ReadAll(r.Body)
-			_, _ = w.Write(b)
+			_, _ = w.Write([]byte(r.Method + " " + string(b)))
 		case "/c":
 			http.Redirect(w, r, "/d", http.StatusTemporaryRedirect)
 		case "/d":
@@ -566,28 +587,92 @@ func TestCustomDoerBodyReadKeepsItsSameMethodHops(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
-	c := New(Options{Doer: &http.Client{}})
+	c := New(Options{Doer: &http.Client{}, RetryMethods: []string{"PROPFIND"}})
 
-	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/a", strings.NewReader("query=up"))
-	resp, err := c.Do(AsRead(context.Background()), req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	body, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusOK || resp.Request.URL.Path != "/b" || string(body) != "query=up" {
-		t.Fatalf("307: got %d for %s with %q; want the read followed with its body", resp.StatusCode, resp.Request.URL.Path, body)
-	}
+	for _, read := range bodyReads {
+		req, _ := http.NewRequest(read.method, srv.URL+"/a", strings.NewReader("query=up"))
+		resp, err := c.Do(read.ctx(), req)
+		if err != nil {
+			t.Fatalf("%s 307: %v", read.method, err)
+		}
+		body, readErr := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if want := read.method + " query=up"; readErr != nil || resp.StatusCode != http.StatusOK || resp.Request.URL.Path != "/b" || string(body) != want {
+			t.Fatalf("%s 307: got %d for %s with %q (%v); want %q, the read followed with its body",
+				read.method, resp.StatusCode, resp.Request.URL.Path, body, readErr, want)
+		}
 
-	req, _ = http.NewRequest(http.MethodPost, srv.URL+"/c", strings.NewReader("query=up"))
-	resp, err = c.Do(AsRead(context.Background()), req)
-	if err != nil {
-		t.Fatal(err)
+		name := read.method + " 307 then 302"
+		req, _ = http.NewRequest(read.method, srv.URL+"/c", strings.NewReader("query=up"))
+		resp, err = c.Do(read.ctx(), req)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		requireRecoveredRedirect(t, name, resp)
+		if resp.StatusCode != http.StatusFound || resp.Request.Method != read.method || resp.Request.URL.Path != "/d" {
+			t.Fatalf("%s: got %d for %s %s; want the 302 that turned it into a GET",
+				name, resp.StatusCode, resp.Request.Method, resp.Request.URL.Path)
+		}
 	}
-	body, _ = io.ReadAll(resp.Body)
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusFound || resp.Request.Method != http.MethodPost || resp.Request.URL.Path != "/d" || len(body) != 0 {
-		t.Fatalf("307 then 302: got %d for %s %s with %q; want the 302 that turned it into a GET",
-			resp.StatusCode, resp.Request.Method, resp.Request.URL.Path, body)
+}
+
+// A read's retries are decided by its answer, not by the page a custom Doer's
+// redirects led to. A 503 at the end of the GET that Go sent for the read's
+// 302 is that GET's failure: the read is answered by its 302 at once, not
+// sent again after the page's Retry-After. A 503 to a hop that kept the
+// read's method is the read's own, and is still retried. Before, Do chose the
+// answer only after the retries, so the read waited out the page's
+// Retry-After and was sent again.
+func TestCustomDoerBodyReadRetriesOnItsOwnAnswer(t *testing.T) {
+	for _, read := range bodyReads {
+		var hits atomic.Int32
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/search":
+				hits.Add(1)
+				http.Redirect(w, r, "/page", http.StatusFound)
+			case "/page":
+				w.Header().Set("Retry-After", "30")
+				w.WriteHeader(http.StatusServiceUnavailable)
+			case "/a":
+				hits.Add(1)
+				http.Redirect(w, r, "/b", http.StatusTemporaryRedirect)
+			case "/b":
+				if hits.Load() == 1 {
+					w.WriteHeader(http.StatusServiceUnavailable)
+					return
+				}
+				_, _ = w.Write([]byte("ok"))
+			}
+		}))
+		c := New(Options{Doer: &http.Client{}, MaxRetries: 2, RetryBaseDelay: time.Millisecond, RetryMethods: []string{"PROPFIND"}})
+
+		name := read.method + " 302 to a 503"
+		ctx, cancel := context.WithTimeout(read.ctx(), 5*time.Second)
+		req, _ := http.NewRequest(read.method, srv.URL+"/search", strings.NewReader("query=up"))
+		resp, err := c.Do(ctx, req)
+		cancel()
+		if err != nil {
+			t.Fatalf("%s: %v; want the 302 without waiting for a retry", name, err)
+		}
+		requireRecoveredRedirect(t, name, resp)
+		if resp.StatusCode != http.StatusFound || hits.Load() != 1 {
+			t.Fatalf("%s: got %d after %d sends; want the 302 after one", name, resp.StatusCode, hits.Load())
+		}
+
+		hits.Store(0)
+		name = read.method + " 307 to a 503"
+		req, _ = http.NewRequest(read.method, srv.URL+"/a", strings.NewReader("query=up"))
+		resp, err = c.Do(read.ctx(), req)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		body, readErr := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if readErr != nil || resp.StatusCode != http.StatusOK || string(body) != "ok" || hits.Load() != 2 {
+			t.Fatalf("%s: got %d with %q (%v) after %d sends; want the retry's 200 after two",
+				name, resp.StatusCode, body, readErr, hits.Load())
+		}
+		srv.Close()
 	}
 }
