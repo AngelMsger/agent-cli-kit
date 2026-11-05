@@ -7,9 +7,11 @@
 package transport
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 )
 
 // Doer executes an HTTP request. *http.Client satisfies it; tests inject fakes.
@@ -24,7 +26,8 @@ type Doer interface {
 type Decorator func(*http.Request)
 
 // loggingDoer wraps a Doer to log each request's method, URL and resulting
-// status (or error) to w — used by --verbose. It logs only the request line and
+// status (or error) to w — used by --verbose. A redirect the default Doer
+// refuses is logged with its status, since Do answers with it. It logs only the request line and
 // outcome, never headers or bodies, and masks a password in the request URL.
 // The username, path and query string are written as sent, and an error is
 // written as the Doer returned it (net/http masks a URL password in its own
@@ -38,6 +41,16 @@ type loggingDoer struct {
 func (l *loggingDoer) Do(req *http.Request) (*http.Response, error) {
 	resp, err := l.inner.Do(req)
 	switch {
+	case resp != nil && errors.Is(err, errRedirectPolicy):
+		// Do answers with this redirect, so the line shows its status, and
+		// the policy's reason without the redirect's own URL, whose query can
+		// carry a sign-in token.
+		reason := err
+		var uerr *url.Error
+		if errors.As(err, &uerr) {
+			reason = uerr.Err
+		}
+		fmt.Fprintf(l.w, "%s %s -> %d (%v)\n", req.Method, req.URL.Redacted(), resp.StatusCode, reason)
 	case err != nil:
 		fmt.Fprintf(l.w, "%s %s -> error: %v\n", req.Method, req.URL.Redacted(), err)
 	case resp != nil:

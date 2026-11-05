@@ -128,21 +128,23 @@ classify every write without nesting one outcome inside another.
 
 ## Redirects
 
-The transport returns a redirect instead of following it when following
+The default Doer returns a redirect instead of following it when following
 would answer a different request (any write, or a read whose method a 301,
 302 or 303 would turn into a GET), when the hop leaves the origin under
 `SameOriginRedirects`, or at the tenth hop. Each comes back as the answer,
 with its status and `Location`, never as a network error, and is not
-retried. A CLI builds its error for any 3xx with
+retried. A custom `Options.Doer` keeps its own policy: a redirect it refuses
+comes back with its error, and a read may be retried after it. A CLI builds its error for any 3xx with
 `WithRedirect(location, errors.RedirectGuide{Setting, Steps})`, where the
 location is `resp.Location()` (nil when there is none). The error keeps the
 CLI's code, category and HTTP status, is not retryable (the same request is
 redirected again), and gets one hint for the family: where the redirect
-points (scheme, host and path; never the query, which can carry a sign-in
-token), what a redirect usually means (a login page, a single sign-on
+points (scheme and host only; a path can carry a session ID and a query a
+sign-in token), what a redirect usually means (a login page, a single sign-on
 proxy, or a server URL that should use https), and the CLI's setting to
 check. A 3xx without a `Location` (a 300 or 304) gets a hint that the same
-request gets the same answer. `FromWrite` still gives a write's redirect
+request gets the same answer, naming the error's HTTP status, so set that
+first. `FromWrite` still gives a write's redirect
 its own hint and read steps.
 
 A CLI's `doctor` maps each check's error with `doctor.Status`,

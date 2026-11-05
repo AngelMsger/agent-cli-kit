@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -38,5 +39,33 @@ func TestVerboseLogNamesTheRequestButNoPassword(t *testing.T) {
 				t.Fatalf("verbose log = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+// A redirect the default Doer refuses is the answer, so --verbose logs its
+// status and the reason, without the redirect's own URL and its query.
+func TestVerboseLogShowsARefusedRedirectsStatus(t *testing.T) {
+	t.Parallel()
+	dest := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("the refused target must not be reached")
+	}))
+	defer dest.Close()
+	src := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, dest.URL+"/sso?ticket=sign-in-secret", http.StatusFound)
+	}))
+	defer src.Close()
+
+	var log strings.Builder
+	c := New(Options{SameOriginRedirects: true, Verbose: &log})
+	req, _ := http.NewRequest(http.MethodGet, src.URL+"/api", nil)
+	resp, err := c.Do(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+	resp.Body.Close()
+	got := log.String()
+	want := "GET " + src.URL + "/api -> 302 (redirect rejected: refusing cross-origin redirect from "
+	if !strings.HasPrefix(got, want) || strings.Contains(got, "sign-in-secret") || strings.Contains(got, "error") {
+		t.Fatalf("verbose log = %q, want a line starting %q without the ticket", got, want)
 	}
 }

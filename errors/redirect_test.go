@@ -11,7 +11,7 @@ var testGuide = RedirectGuide{Setting: "--base-url", Steps: []string{"example-cl
 
 func TestWithRedirectToALocation(t *testing.T) {
 	t.Parallel()
-	loc, _ := url.Parse("https://user:secret@sso.example.com/login/start?token=abc#frag")
+	loc, _ := url.Parse("https://user:secret@sso.example.com/login.jsp;jsessionid=8F3A2C/start?token=abc#frag")
 	e := New(FromHTTPStatus(302), "HTTP_FOUND", "server returned HTTP 302").
 		WithHTTPStatus(302).WithRedirect(loc, testGuide)
 
@@ -24,10 +24,10 @@ func TestWithRedirectToALocation(t *testing.T) {
 	if e.Category != CategoryServer || e.Code != "HTTP_FOUND" || e.HTTPStatus != 302 {
 		t.Errorf("category/code/status changed: %s %s %d", e.Category, e.Code, e.HTTPStatus)
 	}
-	if !strings.Contains(e.Hint, "redirected the request to https://sso.example.com/login/start:") {
+	if !strings.Contains(e.Hint, "redirected the request to https://sso.example.com:") {
 		t.Errorf("hint does not name the target: %q", e.Hint)
 	}
-	for _, leaked := range []string{"secret", "user", "token", "abc", "frag"} {
+	for _, leaked := range []string{"secret", "user", "token", "abc", "frag", "jsessionid", "8F3A2C", "login.jsp"} {
 		if strings.Contains(e.Hint, leaked) {
 			t.Errorf("hint leaks %q: %q", leaked, e.Hint)
 		}
@@ -104,5 +104,19 @@ func TestIsRedirectNil(t *testing.T) {
 	var e *CLIError
 	if e.IsRedirect() {
 		t.Error("nil IsRedirect() = true")
+	}
+}
+
+// An unset setting or status still reads as a sentence.
+func TestWithRedirectFallbacks(t *testing.T) {
+	t.Parallel()
+	e := New(CategoryServer, "X", "msg").WithRedirect(nil, RedirectGuide{})
+	if !strings.Contains(e.Hint, "answered with a 3xx status") || !strings.Contains(e.Hint, "check the server URL first") {
+		t.Errorf("hint = %q", e.Hint)
+	}
+	rel := &url.URL{Path: "/login"}
+	e = New(CategoryServer, "X", "msg").WithHTTPStatus(302).WithRedirect(rel, RedirectGuide{})
+	if !strings.Contains(e.Hint, "redirected the request to another path on the same server:") {
+		t.Errorf("relative location hint = %q", e.Hint)
 	}
 }

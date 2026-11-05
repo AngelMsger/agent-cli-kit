@@ -53,7 +53,7 @@ func TestDetail(t *testing.T) {
 	redirect := cerrors.New(cerrors.CategoryServer, "HTTP_FOUND", "server returned HTTP 302").
 		WithHTTPStatus(302).WithRedirect(loc, cerrors.RedirectGuide{Setting: "--base-url"})
 	got := Detail(redirect)
-	if !strings.HasPrefix(got, "server returned HTTP 302. The server redirected the request to https://sso.example.com/login:") ||
+	if !strings.HasPrefix(got, "server returned HTTP 302. The server redirected the request to https://sso.example.com:") ||
 		!strings.Contains(got, "check --base-url first") || strings.Contains(got, "secret") {
 		t.Errorf("Detail(redirect) = %q", got)
 	}
