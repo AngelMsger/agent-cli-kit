@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-11-05
+
 ### Fixed
 
 - `transport`: a read with a body is answered by the last response to a
