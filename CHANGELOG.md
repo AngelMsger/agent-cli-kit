@@ -7,6 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `errors`: `CLIError.WithRedirect(location, RedirectGuide)` is the family's
+  rule for a 3xx a CLI gets back from the transport. The error keeps the
+  CLI's code, category and HTTP status, and is not retryable: the same
+  request is redirected again. Its hint says where the redirect points (the
+  scheme and host only: a path can carry a session ID such as
+  `;jsessionid=`, and a query a sign-in token), what that usually means (a
+  login page, a single sign-on proxy, or a server URL that should use
+  https), and the setting `RedirectGuide.Setting` names; its next steps are
+  `RedirectGuide.Steps`. A 3xx without a `Location` (a 300 or 304) gets a
+  hint that the same request gets the same answer. `IsRedirect` reports
+  which errors it classified as a redirect. Until now each CLI wrote its own
+  3xx branch, and three of them still called a redirect retryable.
+- `doctor`: `Status`, `RecoveryScope` and `Detail` turn a check's error into
+  its report fields. `Status` and `RecoveryScope` are the seven CLIs'
+  identical `diagnosticStatus` and `diagnosticRecoveryScope`; `Detail` is
+  the error's message, as `detailOf` in four of them (the other three print
+  `err.Error()`, which differs only for an error wrapped with more text). One
+  status is new: `redirected`, for an error `WithRedirect` classified, with
+  its hint in the detail. Before, a redirect read as `unreachable` with only
+  "returned HTTP 302", although the server answered and its URL is what
+  needs fixing.
+
+### Changed
+
+- `transport`: a redirect the default Doer refuses to follow (one that
+  leaves the origin under `SameOriginRedirects`, or the tenth hop of a
+  chain) is returned as the answer, with an empty body and no error, as a
+  redirect it does not follow for any other reason already is. Before, `Do`
+  returned it with a `redirect rejected` error, so a CLI reported it as a
+  network failure (DNS, TLS or timeout) marked retryable, although the kit
+  never retried it. It is still not retried. `--verbose` logs it with its
+  status and the reason (`-> 302 (redirect rejected: …)`), not as an error.
+  A custom `Options.Doer`'s own refusal still comes back with its error.
+
+  Like the redirect changes in 0.7.0 and 0.8.0, this changes what a CLI
+  reports with the bump alone, so each CLI's bump adopts `WithRedirect` and
+  `doctor` in the same change and names the result in its own changelog.
+  The bump alone changes one case: a read that loops through 10 redirects.
+  bitbucket-cli and confluence-cli reported `NETWORK` (exit 8) and would
+  report `HTTP_Found` (exit 9, `http_status` 302, retryable), jenkins-cli
+  `HTTP_FOUND`; jira-cli, openobserve-cli and prometheus-cli already report
+  a returned 3xx as not retryable. Only wecom-calendar-cli turns on
+  `SameOriginRedirects`, and it already reports a returned 3xx the same way.
+
 ## [0.8.1] - 2026-11-05
 
 ### Fixed

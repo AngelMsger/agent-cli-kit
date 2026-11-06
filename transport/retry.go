@@ -41,11 +41,19 @@ func (c *Client) doWithRetry(ctx context.Context, req *http.Request) (*http.Resp
 		resp, err := c.doer.Do(req)
 		if resp != nil {
 			resp = answer(resp, err, stands)
+			if errors.Is(err, errRedirectPolicy) {
+				// The default Doer refused to follow this redirect: it leaves
+				// the origin, or the chain reached 10 hops. Like a redirect it
+				// does not follow because the next hop would be another
+				// request, it is the request's answer, and the same request
+				// is redirected again, so it is not retried.
+				err = nil
+			}
 		}
 		if err == nil && !isTransientStatus(resp.StatusCode) {
 			return resp, nil
 		}
-		if !idempotent || !replayable || errors.Is(err, errRedirectPolicy) || attempt >= c.maxRetries {
+		if !idempotent || !replayable || attempt >= c.maxRetries {
 			return resp, err
 		}
 

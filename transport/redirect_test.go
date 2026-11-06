@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httptrace"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -15,7 +16,8 @@ import (
 
 // TestRedirectCrossOriginRefused guards the credential-leak vector: the client
 // must refuse a redirect that leaves the first hop's origin (here a different
-// port), so Authorization is never forwarded off the configured server.
+// port), so Authorization is never forwarded off the configured server. The
+// refused redirect is the answer, with its status and Location, not an error.
 func TestRedirectCrossOriginRefused(t *testing.T) {
 	reached := false
 	dest := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -28,17 +30,29 @@ func TestRedirectCrossOriginRefused(t *testing.T) {
 	}))
 	defer src.Close()
 
-	c := New(Options{SameOriginRedirects: true})
+	var sent atomic.Int64
+	c := New(Options{SameOriginRedirects: true, MaxRetries: 2, RetryBaseDelay: time.Millisecond})
 	req, _ := http.NewRequest(http.MethodGet, src.URL+"/", nil)
-	resp, err := c.Do(context.Background(), req)
-	if resp != nil {
-		resp.Body.Close()
-	}
-	if err == nil {
-		t.Fatal("cross-origin redirect should be refused")
+	req = req.WithContext(httptrace.WithClientTrace(req.Context(), &httptrace.ClientTrace{
+		WroteRequest: func(httptrace.WroteRequestInfo) { sent.Add(1) },
+	}))
+	resp, err := c.Do(req.Context(), req)
+	if err != nil {
+		t.Fatalf("a refused redirect is the answer, not an error: %v", err)
 	}
 	if reached {
 		t.Fatal("request must not reach the cross-origin destination")
+	}
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("status = %d, want the refused 302", resp.StatusCode)
+	}
+	loc, lerr := resp.Location()
+	if lerr != nil || loc.String() != dest.URL+"/leak" {
+		t.Fatalf("Location = %v (%v), want %s/leak", loc, lerr, dest.URL)
+	}
+	requireRecoveredRedirect(t, "cross-origin", resp)
+	if got := sent.Load(); got != 1 {
+		t.Fatalf("requests sent = %d, want 1: a refused redirect is not retried", got)
 	}
 }
 
@@ -86,7 +100,8 @@ func TestRedirectCrossOriginFollowedByDefault(t *testing.T) {
 	resp.Body.Close()
 }
 
-// Policy failures are terminal even when transient request retries are enabled.
+// A redirect loop ends at the tenth hop, whose redirect is the answer, and is
+// not retried even when transient request retries are enabled.
 func TestRedirectLoopIsBoundedWithoutRetry(t *testing.T) {
 	var calls atomic.Int64
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -95,15 +110,19 @@ func TestRedirectLoopIsBoundedWithoutRetry(t *testing.T) {
 	}))
 	defer srv.Close()
 	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/loop", nil)
-	resp, err := New(Options{SameOriginRedirects: true, MaxRetries: 3, RetryBaseDelay: time.Millisecond}).Do(context.Background(), req)
-	if resp != nil {
-		resp.Body.Close()
-	}
-	if !errors.Is(err, errRedirectPolicy) {
-		t.Fatalf("want redirect policy error, got %v", err)
-	}
-	if got := calls.Load(); got != 10 {
-		t.Fatalf("requests=%d, want 10 including all retries", got)
+	for _, sameOrigin := range []bool{true, false} {
+		calls.Store(0)
+		resp, err := New(Options{SameOriginRedirects: sameOrigin, MaxRetries: 3, RetryBaseDelay: time.Millisecond}).Do(context.Background(), req)
+		if err != nil {
+			t.Fatalf("sameOrigin=%v: the tenth redirect is the answer, not an error: %v", sameOrigin, err)
+		}
+		if resp.StatusCode != http.StatusFound {
+			t.Fatalf("sameOrigin=%v: status = %d, want 302", sameOrigin, resp.StatusCode)
+		}
+		requireRecoveredRedirect(t, fmt.Sprintf("loop sameOrigin=%v", sameOrigin), resp)
+		if got := calls.Load(); got != 10 {
+			t.Fatalf("sameOrigin=%v: requests=%d, want 10 including all retries", sameOrigin, got)
+		}
 	}
 }
 

@@ -49,6 +49,9 @@ type CLIError struct {
 	// writeOutcome marks an error the write-outcome builders made, so
 	// FromWrite does not wrap it twice.
 	writeOutcome bool
+	// redirect marks an error WithRedirect classified as a redirect to a
+	// location (see IsRedirect).
+	redirect bool
 }
 
 // Recovery describes an environment change a caller can make before retrying.
