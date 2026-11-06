@@ -53,7 +53,9 @@ func (e *CLIError) WithRedirect(location *url.URL, g RedirectGuide) *CLIError {
 			"request does not expect. The same request gets the same answer, so check %s first.",
 			status, setting)
 	}
-	e.NextSteps = g.Steps
+	// A copy, so a caller that appends a step does not write into a guide
+	// that every error shares.
+	e.NextSteps = append([]string(nil), g.Steps...)
 	e.Retryable = false
 	e.redirect = location != nil
 	return e
