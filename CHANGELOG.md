@@ -48,16 +48,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Like the redirect changes in 0.7.0 and 0.8.0, this changes what a CLI
   reports with the bump alone, so each CLI's bump adopts `WithRedirect` and
   `doctor` in the same change and names the result in its own changelog.
-  The bump alone changes one case: a read that loops through 10 redirects,
-  which every CLI reported as `NETWORK` (exit 8). jira-cli, openobserve-cli
-  and prometheus-cli would report the tenth 302 as their not-retryable 3xx
-  error, and bitbucket-cli, confluence-cli and jenkins-cli as a retryable
-  `HTTP_Found` or `HTTP_FOUND` (exit 9). Where a read took any status below
-  400 as its answer, the 302 would read as an empty one: bitbucket-cli's
-  file, diff and Data Center identity reads, confluence-cli's attachment
-  download, and jenkins-cli's JSON and console reads. Each CLI's adoption
-  makes those take only a 2xx. Only wecom-calendar-cli turns on
-  `SameOriginRedirects`, and it already reports a returned 3xx the same way.
+  The bump alone changes two cases, both reported as a retryable `NETWORK`
+  (exit 8) until now: a read that loops through 10 redirects, in every CLI,
+  and a redirect that leaves the server's origin in wecom-calendar-cli, the
+  only CLI that turns on `SameOriginRedirects`. jira-cli, openobserve-cli,
+  prometheus-cli and wecom-calendar-cli would report that 3xx as their
+  not-retryable 3xx error (`CALDAV_SERVER` in wecom-calendar-cli), and
+  bitbucket-cli, confluence-cli and jenkins-cli as a retryable `HTTP_Found`
+  or `HTTP_FOUND`, all exit 9. A read that took any status below 400 as its
+  answer would get the redirect's empty body instead: bitbucket-cli's file
+  and diff reads and confluence-cli's attachment download would return
+  empty content, jenkins-cli's console read empty text and its JSON reads a
+  `DECODE` error (exit 10), and bitbucket-cli's Data Center identity read
+  would take the user from the redirect's `X-AUSERNAME` header, failing
+  with `AUTH_IDENTITY_UNAVAILABLE` (exit 4) when it has none. Each CLI's
+  adoption makes those reads take only a 2xx.
 
 ## [0.8.1] - 2026-11-05
 
