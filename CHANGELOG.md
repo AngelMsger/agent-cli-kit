@@ -46,11 +46,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Like the redirect changes in 0.7.0 and 0.8.0, this changes what a CLI
   reports with the bump alone, so each CLI's bump adopts `WithRedirect` and
   `doctor` in the same change and names the result in its own changelog.
-  The bump alone changes one case: a read that loops through 10 redirects.
-  bitbucket-cli and confluence-cli reported `NETWORK` (exit 8) and would
-  report `HTTP_Found` (exit 9, `http_status` 302, retryable), jenkins-cli
-  `HTTP_FOUND`; jira-cli, openobserve-cli and prometheus-cli already report
-  a returned 3xx as not retryable. Only wecom-calendar-cli turns on
+  The bump alone changes one case: a read that loops through 10 redirects,
+  which every CLI reported as `NETWORK` (exit 8). jira-cli, openobserve-cli
+  and prometheus-cli would report the tenth 302 as their not-retryable 3xx
+  error, and bitbucket-cli, confluence-cli and jenkins-cli as a retryable
+  `HTTP_Found` or `HTTP_FOUND` (exit 9). Where a read took any status below
+  400 as its answer, the 302 would read as an empty one: bitbucket-cli's
+  file, diff and Data Center identity reads, confluence-cli's attachment
+  download, and jenkins-cli's JSON and console reads. Each CLI's adoption
+  makes those take only a 2xx. Only wecom-calendar-cli turns on
   `SameOriginRedirects`, and it already reports a returned 3xx the same way.
 
 ## [0.8.1] - 2026-11-05

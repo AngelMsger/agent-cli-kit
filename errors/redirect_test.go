@@ -120,3 +120,17 @@ func TestWithRedirectFallbacks(t *testing.T) {
 		t.Errorf("relative location hint = %q", e.Hint)
 	}
 }
+
+// Appending to one error's next steps leaves the shared guide alone.
+func TestWithRedirectCopiesTheSteps(t *testing.T) {
+	t.Parallel()
+	guide := RedirectGuide{Setting: "--base-url", Steps: make([]string, 1, 4)}
+	guide.Steps[0] = "example-cli doctor"
+	e := New(CategoryServer, "X", "msg").WithHTTPStatus(302).WithRedirect(nil, guide)
+	e.NextSteps = append(e.NextSteps, "example-cli status flags")
+	other := New(CategoryServer, "X", "msg").WithHTTPStatus(302).WithRedirect(nil, guide)
+	other.NextSteps = append(other.NextSteps, "example-cli other")
+	if e.NextSteps[1] != "example-cli status flags" || len(guide.Steps) != 1 {
+		t.Fatalf("steps = %v, guide = %v", e.NextSteps, guide.Steps)
+	}
+}
